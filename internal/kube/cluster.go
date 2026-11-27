@@ -183,6 +183,53 @@ func (c *Cluster) PodsOn(ctx context.Context, node string) ([]corev1.Pod, error)
 	return list.Items, nil
 }
 
+// Service is a Service as far as the agent uses one: what it selects,
+// for the site's picture of the cluster, and where it listens, for a
+// request the site sends into the cluster.
+type Service struct {
+	Namespace string
+	Name      string
+	ClusterIP string
+	// Selector is the labels a pod has to carry to be behind the
+	// Service. A Service without one selects nothing.
+	Selector map[string]string
+}
+
+// Services returns every Service that selects pods.
+func (c *Cluster) Services(ctx context.Context) ([]Service, error) {
+	list, err := c.client.CoreV1().Services(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	services := make([]Service, 0, len(list.Items))
+	for _, item := range list.Items {
+		if len(item.Spec.Selector) == 0 {
+			continue
+		}
+		services = append(services, Service{
+			Namespace: item.Namespace,
+			Name:      item.Name,
+			ClusterIP: item.Spec.ClusterIP,
+			Selector:  item.Spec.Selector,
+		})
+	}
+	return services, nil
+}
+
+// Selects reports whether the Service selects a pod of a namespace
+// with these labels.
+func (s Service) Selects(namespace string, labels map[string]string) bool {
+	if namespace != s.Namespace || len(s.Selector) == 0 {
+		return false
+	}
+	for key, value := range s.Selector {
+		if labels[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
 // SetStatus writes a pod's status.
 func (c *Cluster) SetStatus(ctx context.Context, pod *corev1.Pod, status corev1.PodStatus) error {
 	patch, err := json.Marshal(map[string]any{

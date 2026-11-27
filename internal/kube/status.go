@@ -40,6 +40,9 @@ type Snapshot struct {
 	ContainerID string
 
 	Stage Stage
+	// Unready is set for a running container whose readiness probe has
+	// not passed: the pod runs, and no Service sends it anything.
+	Unready bool
 	// Reason and Message say why the container is waiting or how the
 	// container ended, when there is more to say than the stage.
 	Reason  string
@@ -83,9 +86,11 @@ func Status(s Snapshot) corev1.PodStatus {
 		container.State.Waiting = &corev1.ContainerStateWaiting{Reason: reason, Message: s.Message}
 	case StageRunning:
 		phase = corev1.PodRunning
-		ready = corev1.ConditionTrue
 		started := true
-		container.Ready = true
+		if !s.Unready {
+			ready = corev1.ConditionTrue
+			container.Ready = true
+		}
 		container.Started = &started
 		container.State.Running = &corev1.ContainerStateRunning{StartedAt: s.Started}
 	case StageExited:

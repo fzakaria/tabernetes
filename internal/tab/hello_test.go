@@ -94,3 +94,32 @@ func TestLabelValue(t *testing.T) {
 		}
 	}
 }
+
+// TestZone checks that a time zone's name is kept when it is made of
+// what such names are made of, and dropped when it is anything else: a
+// zone is a stranger's text that ends up on a page.
+func TestZone(t *testing.T) {
+	kept := []string{"America/Los_Angeles", "Asia/Kolkata", "Etc/GMT+8", "UTC", "America/Argentina/Buenos_Aires"}
+	for _, zone := range kept {
+		if got := (Hello{Zone: zone}).PlainZone(); got != zone {
+			t.Errorf("%q became %q", zone, got)
+		}
+	}
+	dropped := []string{"", "<script>", "America/Los Angeles", "../../etc", strings.Repeat("A", 100), "12345", "a;b"}
+	for _, zone := range dropped {
+		if got := (Hello{Zone: zone}).PlainZone(); got != "" {
+			t.Errorf("%q was kept as %q", zone, got)
+		}
+	}
+}
+
+// TestPlainThreads checks that a thread count is kept when it is one a
+// device could have, and counted as none otherwise.
+func TestPlainThreads(t *testing.T) {
+	cases := map[int]int{8: 8, 1: 1, 0: 0, -4: 0, 100000: 0}
+	for threads, want := range cases {
+		if got := (Hello{Threads: threads}).PlainThreads(); got != want {
+			t.Errorf("%d threads became %d, want %d", threads, got, want)
+		}
+	}
+}

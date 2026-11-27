@@ -98,6 +98,20 @@ func TestStatus(t *testing.T) {
 		}
 	}
 
+	// Running, with a readiness probe that has not passed: the phase is
+	// still Running, and the pod is not ready.
+	unready := running
+	unready.Unready = true
+	status = Status(unready)
+	if status.Phase != corev1.PodRunning || status.ContainerStatuses[0].Ready {
+		t.Errorf("unready: %+v", status)
+	}
+	for _, condition := range status.Conditions {
+		if condition.Type == corev1.PodReady && condition.Status != corev1.ConditionFalse {
+			t.Error("a pod whose probe has not passed is ready")
+		}
+	}
+
 	succeeded := base
 	succeeded.Stage = StageExited
 	if got := Status(succeeded); got.Phase != corev1.PodSucceeded || got.ContainerStatuses[0].State.Terminated.Reason != ReasonCompleted {
@@ -109,5 +123,31 @@ func TestStatus(t *testing.T) {
 	failed.ExitCode = 3
 	if got := Status(failed); got.Phase != corev1.PodFailed || got.ContainerStatuses[0].State.Terminated.ExitCode != 3 {
 		t.Errorf("exit 3: %+v", got)
+	}
+}
+
+// TestServiceSelects checks which pods a Service is in front of: those
+// of its own namespace that carry every label of its selector, whatever
+// else they carry, and none at all when the selector is empty.
+func TestServiceSelects(t *testing.T) {
+	service := Service{Namespace: "shop", Name: "web", Selector: map[string]string{"app": "web", "tier": "front"}}
+	cases := []struct {
+		namespace string
+		labels    map[string]string
+		want      bool
+	}{
+		{"shop", map[string]string{"app": "web", "tier": "front", "extra": "x"}, true},
+		{"shop", map[string]string{"app": "web"}, false},
+		{"shop", map[string]string{"app": "db", "tier": "front"}, false},
+		{"other", map[string]string{"app": "web", "tier": "front"}, false},
+		{"shop", nil, false},
+	}
+	for _, c := range cases {
+		if got := service.Selects(c.namespace, c.labels); got != c.want {
+			t.Errorf("%s %v: got %v", c.namespace, c.labels, got)
+		}
+	}
+	if (Service{Namespace: "shop"}).Selects("shop", map[string]string{"app": "web"}) {
+		t.Error("a Service with no selector selected a pod")
 	}
 }

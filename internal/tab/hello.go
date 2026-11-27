@@ -24,6 +24,10 @@ type Hello struct {
 	Threads int `json:"threads"`
 	// Touch is whether the device's pointer is a finger.
 	Touch bool `json:"touch"`
+	// Zone is the browser's time zone, such as "Europe/Lisbon". The site
+	// puts a node on its map by the zone's city, which says roughly
+	// where a node is without the agent looking up anyone's address.
+	Zone string `json:"zone"`
 }
 
 // The limits of a name: a DNS label's length, and how much of it the
@@ -149,4 +153,43 @@ func printable(text string) string {
 		out.WriteRune(char)
 	}
 	return strings.TrimSpace(out.String())
+}
+
+// The limits of what a browser says besides its names: the longest a
+// time zone's name is taken, and the most threads a device is believed
+// to have.
+const (
+	maxZoneLength = 64
+	maxThreads    = 1024
+)
+
+// PlainZone returns the tab's time zone if the name is made of what
+// zone names are made of: letters, digits, and the marks between them,
+// with a letter first and no dots. Anything else is no zone.
+func (h Hello) PlainZone() string {
+	zone := h.Zone
+	if zone == "" || len(zone) > maxZoneLength {
+		return ""
+	}
+	for index, char := range zone {
+		isLetter := (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z')
+		isDigit := char >= '0' && char <= '9'
+		isMark := char == '/' || char == '_' || char == '-' || char == '+'
+		if index == 0 && !isLetter {
+			return ""
+		}
+		if !isLetter && !isDigit && !isMark {
+			return ""
+		}
+	}
+	return zone
+}
+
+// PlainThreads returns how many threads the tab's device has, or none
+// when the browser's number is not one a device could have.
+func (h Hello) PlainThreads() int {
+	if h.Threads < 0 || h.Threads > maxThreads {
+		return 0
+	}
+	return h.Threads
 }
