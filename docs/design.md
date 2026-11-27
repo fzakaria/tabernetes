@@ -147,9 +147,12 @@ What the page shows comes from three places:
   That is the topology.
 - **The ledger** (`internal/agent/ledger.go`): counts that begin when
   the cluster first starts and are kept in a file across restarts, the
-  last 60 events and the last 240 boots. A boot is timed from the tab
-  being told of its container to tabc reporting the program running,
-  to the nearest quarter second.
+  last 60 events, the last 240 boots and the last 240 requests visitors
+  sent into the cluster. A boot is timed from the tab being told of its
+  container to tabc reporting the program running, to the nearest
+  quarter second. A request is timed from the agent handing it to the
+  Service to the answer being back, which leaves out the way between
+  the visitor and the machine.
 - **Counters on the connections** between each tab and its pod's tabc,
   which is where "carried" comes from: the image's files as the guest
   reads them, the program's output and the pod's own traffic.

@@ -89,7 +89,8 @@ func (a *askers) allow(name, address string) bool {
 //
 // Only a GET is carried, only to a Service the agent was started with
 // and for a path that Service was exposed with, and only so often for
-// each visitor.
+// each visitor. Every request that is carried is timed, for the site's
+// chart of how long the cluster takes to answer.
 func (a *Agent) serveApp(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	exposed, has := a.config.Exposed[name]
@@ -109,8 +110,7 @@ func (a *Agent) serveApp(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("the cluster has no service %s/%s", exposed.Namespace, exposed.Service), http.StatusServiceUnavailable)
 		return
 	}
-	a.ledger.asked(name)
-	a.carry(w, r, net.JoinHostPort(service.ClusterIP, strconv.Itoa(exposed.Port)), rest)
+	a.carry(w, r, name, net.JoinHostPort(service.ClusterIP, strconv.Itoa(exposed.Port)), rest)
 }
 
 // serveNodeApp carries a request to the pod of an exposed Service that
@@ -135,8 +135,7 @@ func (a *Agent) serveNodeApp(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	a.ledger.asked(name)
-	a.carry(w, r, address, rest)
+	a.carry(w, r, name, address, rest)
 }
 
 // service returns an exposed Service as the last listing had it.
@@ -179,9 +178,15 @@ func (a *Agent) podAddress(exposed Exposed, node string) (string, error) {
 	return "", fmt.Errorf("node %s runs no pod of service %s/%s", node, exposed.Namespace, exposed.Service)
 }
 
-// carry sends a visitor's request on to an address inside the cluster,
-// for a path there, and the answer back.
-func (a *Agent) carry(w http.ResponseWriter, r *http.Request, address, path string) {
+// carry sends a visitor's request for an exposed Service on to an
+// address inside the cluster, for a path there, and the answer back.
+// The ledger is told how long the two took together, and how the
+// visitor was answered.
+func (a *Agent) carry(w http.ResponseWriter, r *http.Request, name, address, path string) {
+	// The status the visitor is answered with: the pod's own, or bad
+	// gateway from the proxy's error handler when no pod answered.
+	status := http.StatusOK
+
 	target := &url.URL{Scheme: "http", Host: address}
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(request *httputil.ProxyRequest) {
@@ -198,12 +203,21 @@ func (a *Agent) carry(w http.ResponseWriter, r *http.Request, address, path stri
 			DialContext:       (&net.Dialer{Timeout: askDialTimeout}).DialContext,
 			DisableKeepAlives: true,
 		},
+		ModifyResponse: func(response *http.Response) error {
+			status = response.StatusCode
+			return nil
+		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
-			http.Error(w, "no pod answered: "+err.Error(), http.StatusBadGateway)
+			status = http.StatusBadGateway
+			http.Error(w, "no pod answered: "+err.Error(), status)
 		},
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), askTimeout)
 	defer cancel()
 	w.Header().Set("Cache-Control", "no-store")
+
+	// The request goes into the cluster and its answer comes back.
+	began := time.Now()
 	proxy.ServeHTTP(w, r.WithContext(ctx))
+	a.ledger.asked(name, time.Since(began), status, time.Now())
 }

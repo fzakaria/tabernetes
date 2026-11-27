@@ -10,10 +10,12 @@ import (
 )
 
 // How much of what happened the ledger keeps to show: the latest
-// events, and the latest boots, which the site's chart is drawn from.
+// events, and the latest boots and the latest asks, which the site's
+// charts are drawn from.
 const (
 	eventsKept = 60
 	bootsKept  = 240
+	asksKept   = 240
 )
 
 // The ledger's file under the agent's state directory, and its mode.
@@ -94,27 +96,43 @@ type Boot struct {
 	Model    string `json:"model"`
 }
 
+// Ask is one request a visitor sent into the cluster, as the site's
+// chart counts it.
+type Ask struct {
+	At time.Time `json:"at"`
+	// App is the name the Service that was asked is exposed by.
+	App string `json:"app"`
+	// Seconds is how long the agent waited: from sending the request
+	// on to the Service until the last of the answer had come back.
+	Seconds float64 `json:"seconds"`
+	// Status is the HTTP status the visitor was answered with: the
+	// pod's own, or bad gateway when no pod answered.
+	Status int `json:"status"`
+}
+
 // ledger is the agent's record of what happened: the totals, the latest
-// events and the latest boots.
+// events, the latest boots and the latest asks.
 type ledger struct {
 	mu     sync.Mutex
 	totals Totals
 	events []Event
 	boots  []Boot
+	asks   []Ask
 	nextID int64
 }
 
 // saved is the ledger as its file holds it: the totals, and the latest
-// boots, so that the site's chart of them is not empty after every
-// restart of the agent. The feed is not kept: what happened before a
-// restart is not happening now.
+// boots and asks, so that the site's charts of them are not empty
+// after every restart of the agent. The feed is not kept: what
+// happened before a restart is not happening now.
 type saved struct {
 	Totals Totals `json:"totals"`
 	Boots  []Boot `json:"boots"`
+	Asks   []Ask  `json:"asks"`
 }
 
-// newLedger returns a ledger with the totals and the boots an earlier
-// agent saved under a directory, or one that starts now.
+// newLedger returns a ledger with the totals, the boots and the asks
+// an earlier agent saved under a directory, or one that starts now.
 func newLedger(dir string, now time.Time) *ledger {
 	book := &ledger{totals: Totals{Since: now}}
 	contents, err := os.ReadFile(filepath.Join(dir, ledgerFile))
@@ -126,7 +144,7 @@ func newLedger(dir string, now time.Time) *ledger {
 		return book
 	}
 	if !kept.Totals.Since.IsZero() {
-		book.totals, book.boots = kept.Totals, kept.Boots
+		book.totals, book.boots, book.asks = kept.Totals, kept.Boots, kept.Asks
 		return book
 	}
 
@@ -139,11 +157,12 @@ func newLedger(dir string, now time.Time) *ledger {
 	return book
 }
 
-// save writes the totals and the boots under a directory, by way of a
-// second file so that a crash mid-write leaves the old ones whole.
+// save writes the totals, the boots and the asks under a directory, by
+// way of a second file so that a crash mid-write leaves the old ones
+// whole.
 func (l *ledger) save(dir string) error {
 	l.mu.Lock()
-	contents, err := json.Marshal(saved{Totals: l.totals, Boots: l.boots})
+	contents, err := json.Marshal(saved{Totals: l.totals, Boots: l.boots, Asks: l.asks})
 	l.mu.Unlock()
 	if err != nil {
 		return err
@@ -223,9 +242,10 @@ func (l *ledger) carried(bytes int64) {
 	l.mu.Unlock()
 }
 
-// asked counts one request a visitor sent to an exposed Service, by
-// the name the Service is exposed under.
-func (l *ledger) asked(name string) {
+// asked records one request a visitor sent to an exposed Service: the
+// name the Service is exposed under, how long the answer took, and the
+// status the visitor was answered with.
+func (l *ledger) asked(name string, took time.Duration, status int, now time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.totals.Asked++
@@ -233,14 +253,18 @@ func (l *ledger) asked(name string) {
 		l.totals.AskedOf = map[string]int64{}
 	}
 	l.totals.AskedOf[name]++
+	l.asks = append(l.asks, Ask{At: now, App: name, Seconds: took.Seconds(), Status: status})
+	if len(l.asks) > asksKept {
+		l.asks = l.asks[len(l.asks)-asksKept:]
+	}
 }
 
-// view returns the totals, the events and the boots as they are now.
-// All three are the caller's own.
-func (l *ledger) view() (Totals, []Event, []Boot) {
+// view returns the totals, the events, the boots and the asks as they
+// are now. All four are the caller's own.
+func (l *ledger) view() (Totals, []Event, []Boot, []Ask) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	totals := l.totals
 	totals.AskedOf = maps.Clone(l.totals.AskedOf)
-	return totals, append([]Event{}, l.events...), append([]Boot{}, l.boots...)
+	return totals, append([]Event{}, l.events...), append([]Boot{}, l.boots...), append([]Ask{}, l.asks...)
 }

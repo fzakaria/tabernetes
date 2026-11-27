@@ -1,17 +1,20 @@
 package agent
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
 
-// TestLedgerTotals checks what a join, a start and a leave each add to
-// the totals: the count of joins and the peak, the start and its boot
-// time, and on the leave the node's lifetime, the pods it took with it
-// and the record for the longest-lived node. A visitor's request is
-// counted once in all and once for the Service it was sent to.
+// TestLedgerTotals checks what a join, a start, a leave and a
+// visitor's request each add to the totals: the count of joins and the
+// peak, the start and its boot time, on the leave the node's lifetime,
+// the pods it took with it and the record for the longest-lived node,
+// and for the request a count in all, a count for the Service it was
+// sent to, and a record of how long its answer took.
 func TestLedgerTotals(t *testing.T) {
 	now := time.Unix(1000, 0)
 	book := newLedger(t.TempDir(), now)
@@ -22,11 +25,11 @@ func TestLedgerTotals(t *testing.T) {
 	book.left("pixel-1", 90*time.Second, []string{"default/web"}, now)
 	book.left("pixel-2", 30*time.Second, nil, now)
 	book.carried(4096)
-	book.asked("counter")
-	book.asked("counter")
-	book.asked("picture")
+	book.asked("counter", 120*time.Millisecond, http.StatusOK, now)
+	book.asked("counter", 80*time.Millisecond, http.StatusOK, now)
+	book.asked("picture", 40*time.Millisecond, http.StatusBadGateway, now)
 
-	totals, events, boots := book.view()
+	totals, events, boots, asks := book.view()
 	if totals.Joins != 2 || totals.PeakNodes != 2 {
 		t.Errorf("joins %d, peak %d", totals.Joins, totals.PeakNodes)
 	}
@@ -45,7 +48,7 @@ func TestLedgerTotals(t *testing.T) {
 
 	// What a reader was given is the reader's own: a later request
 	// does not change the count under it.
-	book.asked("counter")
+	book.asked("counter", 60*time.Millisecond, http.StatusOK, now)
 	if totals.AskedOf["counter"] != 2 {
 		t.Errorf("a view's count changed after the view was taken: %v", totals.AskedOf)
 	}
@@ -68,26 +71,34 @@ func TestLedgerTotals(t *testing.T) {
 	if len(boots) != 1 || boots[0].Model != "Pixel-9" || boots[0].Seconds != 2.5 {
 		t.Errorf("boots %+v", boots)
 	}
+	want := []Ask{
+		{At: now, App: "counter", Seconds: 0.12, Status: http.StatusOK},
+		{At: now, App: "counter", Seconds: 0.08, Status: http.StatusOK},
+		{At: now, App: "picture", Seconds: 0.04, Status: http.StatusBadGateway},
+	}
+	if !slices.Equal(asks, want) {
+		t.Errorf("asks %+v", asks)
+	}
 }
 
-// TestLedgerSaves checks that the totals and the boots a ledger saved
-// are what the next ledger starts with, the day the cluster first
-// started and the requests sent to each Service among them, and that
-// the feed starts empty: what happened
-// before a restart is not happening now.
+// TestLedgerSaves checks that the totals, the boots and the asks a
+// ledger saved are what the next ledger starts with, the day the
+// cluster first started and the requests sent to each Service among
+// them, and that the feed starts empty: what happened before a restart
+// is not happening now.
 func TestLedgerSaves(t *testing.T) {
 	dir := t.TempDir()
 	first := time.Unix(1000, 0)
 	book := newLedger(dir, first)
 	book.joined("pixel-1", 1, first)
 	book.started("pixel-1", "default/web", "Android", "Pixel-9", 2500*time.Millisecond, first)
-	book.asked("counter")
+	book.asked("counter", 120*time.Millisecond, http.StatusOK, first)
 	if err := book.save(dir); err != nil {
 		t.Fatal(err)
 	}
 
 	later := newLedger(dir, time.Unix(9000, 0))
-	totals, events, boots := later.view()
+	totals, events, boots, asks := later.view()
 	if totals.Joins != 1 || !totals.Since.Equal(first) {
 		t.Errorf("after a restart: joins %d, since %v", totals.Joins, totals.Since)
 	}
@@ -96,6 +107,9 @@ func TestLedgerSaves(t *testing.T) {
 	}
 	if len(boots) != 1 || boots[0].Seconds != 2.5 || boots[0].Model != "Pixel-9" {
 		t.Errorf("after a restart the boots are %+v", boots)
+	}
+	if len(asks) != 1 || asks[0].Seconds != 0.12 || asks[0].App != "counter" {
+		t.Errorf("after a restart the asks are %+v", asks)
 	}
 	if len(events) != 0 {
 		t.Errorf("after a restart the feed has %d events", len(events))
@@ -111,14 +125,15 @@ func TestLedgerReadsTotalsAlone(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ledgerFile), []byte(old), ledgerFileMode); err != nil {
 		t.Fatal(err)
 	}
-	totals, _, boots := newLedger(dir, time.Unix(9000, 0)).view()
+	totals, _, boots, _ := newLedger(dir, time.Unix(9000, 0)).view()
 	if totals.Joins != 7 || totals.Since.Year() != 2026 || len(boots) != 0 {
 		t.Errorf("from a file of totals alone: %+v, %d boots", totals, len(boots))
 	}
 }
 
-// TestLedgerKeepsTheLatest checks that the feed and the boots hold no
-// more than they are meant to, and that what they hold is the newest.
+// TestLedgerKeepsTheLatest checks that the feed, the boots and the
+// asks hold no more than they are meant to, and that what they hold is
+// the newest: by recording more of each than the ledger keeps.
 func TestLedgerKeepsTheLatest(t *testing.T) {
 	now := time.Unix(1000, 0)
 	book := newLedger(t.TempDir(), now)
@@ -126,9 +141,16 @@ func TestLedgerKeepsTheLatest(t *testing.T) {
 		book.started("node", "default/pod", "Android", "Pixel", time.Duration(index)*time.Second, now)
 	}
 
-	_, events, boots := book.view()
-	if len(events) != eventsKept || len(boots) != bootsKept {
-		t.Errorf("%d events and %d boots kept", len(events), len(boots))
+	for index := 0; index < asksKept+50; index++ {
+		book.asked("counter", time.Duration(index)*time.Second, http.StatusOK, now)
+	}
+
+	_, events, boots, asks := book.view()
+	if len(events) != eventsKept || len(boots) != bootsKept || len(asks) != asksKept {
+		t.Errorf("%d events, %d boots and %d asks kept", len(events), len(boots), len(asks))
+	}
+	if last := asks[len(asks)-1].Seconds; last != float64(asksKept+49) {
+		t.Errorf("the newest ask kept is %v", last)
 	}
 	if last := boots[len(boots)-1].Seconds; last != float64(bootsKept+49) {
 		t.Errorf("the newest boot kept is %v", last)

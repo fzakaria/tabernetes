@@ -102,6 +102,9 @@ type View struct {
 	Services []ServiceView `json:"services"`
 	Events   []Event       `json:"events"`
 	Boots    []Boot        `json:"boots"`
+	// Asks are the latest requests visitors sent into the cluster,
+	// oldest first, with how long each took.
+	Asks []Ask `json:"asks"`
 	// Exposed are the names of the Services a visitor may send a
 	// request to.
 	Exposed []string `json:"exposed"`
@@ -111,7 +114,7 @@ type View struct {
 // with the pods on each, the Services in front of those pods, and the
 // ledger.
 func (a *Agent) Snapshot() View {
-	totals, events, boots := a.ledger.view()
+	totals, events, boots, asks := a.ledger.view()
 	reading, busy, _ := a.machineNow()
 	view := View{
 		Now:     time.Now(),
@@ -129,6 +132,7 @@ func (a *Agent) Snapshot() View {
 		Services: []ServiceView{},
 		Events:   events,
 		Boots:    boots,
+		Asks:     asks,
 		Exposed:  []string{},
 	}
 	for name := range a.config.Exposed {
