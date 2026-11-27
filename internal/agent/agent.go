@@ -128,6 +128,17 @@ type Exposed struct {
 	Namespace string
 	Service   string
 	Port      int
+	// Path is the one path of the Service a visitor may ask for, with
+	// the paths under that one, as "/json". Empty means every path.
+	Path string
+}
+
+// Carries reports whether a visitor may ask the Service for a path.
+func (e Exposed) Carries(path string) bool {
+	if e.Path == "" {
+		return true
+	}
+	return path == e.Path || strings.HasPrefix(path, e.Path+"/")
 }
 
 // Agent holds the tabs that are nodes and the pods that run on them.

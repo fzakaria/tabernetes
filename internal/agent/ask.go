@@ -66,11 +66,13 @@ func (a *askers) allow(address string) bool {
 // The Service sends it on to one of its pods, which may be on anyone's
 // phone: that is the point of asking.
 //
-// Only a GET is carried, only to a Service the agent was started with,
-// and only so often for each visitor.
+// Only a GET is carried, only to a Service the agent was started with
+// and for a path that Service was exposed with, and only so often for
+// each visitor.
 func (a *Agent) serveApp(w http.ResponseWriter, r *http.Request) {
 	exposed, has := a.config.Exposed[r.PathValue("name")]
-	if !has {
+	rest := "/" + r.PathValue("rest")
+	if !has || !exposed.Carries(rest) {
 		http.NotFound(w, r)
 		return
 	}
@@ -95,7 +97,6 @@ func (a *Agent) serveApp(w http.ResponseWriter, r *http.Request) {
 	a.ledger.asked()
 
 	target := &url.URL{Scheme: "http", Host: net.JoinHostPort(address, strconv.Itoa(exposed.Port))}
-	rest := "/" + r.PathValue("rest")
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(request *httputil.ProxyRequest) {
 			request.SetURL(target)

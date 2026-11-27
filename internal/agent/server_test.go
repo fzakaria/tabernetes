@@ -173,6 +173,31 @@ func TestAskUnknown(t *testing.T) {
 	}
 }
 
+// TestCarries checks which paths of an exposed Service a visitor may ask
+// for: every path when the Service was exposed whole, and otherwise the
+// path it was exposed with and the paths under that one, and no path
+// that only begins with the same letters.
+func TestCarries(t *testing.T) {
+	whole := Exposed{Namespace: "default", Service: "web", Port: 8000}
+	for _, path := range []string{"/", "/json", "/tile/1/8/3"} {
+		if !whole.Carries(path) {
+			t.Errorf("a Service exposed whole refused %q", path)
+		}
+	}
+
+	part := Exposed{Namespace: "default", Service: "web", Port: 8000, Path: "/json"}
+	for _, path := range []string{"/json", "/json/latest"} {
+		if !part.Carries(path) {
+			t.Errorf("a Service exposed at /json refused %q", path)
+		}
+	}
+	for _, path := range []string{"/", "/tile/1/8/3", "/jsonp", "/tile/json"} {
+		if part.Carries(path) {
+			t.Errorf("a Service exposed at /json carried %q", path)
+		}
+	}
+}
+
 // TestAskers checks that a visitor may ask a few times at once and is
 // then refused, and that another visitor is not refused with them.
 func TestAskers(t *testing.T) {

@@ -105,7 +105,7 @@ func run() error {
 		kubeletCA     = flag.String("kubelet-client-ca", "/var/lib/rancher/k3s/agent/client-ca.crt", "the authority whose clients may make kubelet requests: the API server's")
 		runtimeClass  = flag.String("runtime-class", "tab", "the RuntimeClass whose pods run in tabs")
 		zone          = flag.String("zone", "", "the time zone the machine is in, where the site's map puts the cluster (as America/Los_Angeles)")
-		expose        = flag.String("expose", "", "Services a visitor of the site may send requests to, as name=namespace/service:port, separated by commas")
+		expose        = flag.String("expose", "", "Services a visitor of the site may send requests to, as name=namespace/service:port or name=namespace/service:port/path, separated by commas")
 		showVersion   = flag.Bool("version", false, "print the version and exit")
 	)
 	flag.Parse()
@@ -265,7 +265,10 @@ func run() error {
 }
 
 // parseExposed reads the Services a visitor may send requests to:
-// "counter=default/web:8000", and more of the same after commas.
+// "counter=default/web:8000", and more of the same after commas. An
+// entry that ends with a path, as "counter=default/web:8000/json",
+// exposes that path of the Service and the paths under it, and no
+// other.
 func parseExposed(text string) (map[string]agent.Exposed, error) {
 	exposed := map[string]agent.Exposed{}
 	for _, entry := range strings.Split(text, ",") {
@@ -275,12 +278,16 @@ func parseExposed(text string) (map[string]agent.Exposed, error) {
 		}
 		name, target, hasName := strings.Cut(entry, "=")
 		namespace, rest, hasNamespace := strings.Cut(target, "/")
-		service, portText, hasPort := strings.Cut(rest, ":")
+		service, rest, hasPort := strings.Cut(rest, ":")
+		portText, path, hasPath := strings.Cut(rest, "/")
 		port, err := strconv.Atoi(portText)
-		if !hasName || !hasNamespace || !hasPort || name == "" || namespace == "" || service == "" || err != nil || port <= 0 {
-			return nil, fmt.Errorf("%q is not name=namespace/service:port", entry)
+		if !hasName || !hasNamespace || !hasPort || name == "" || namespace == "" || service == "" || err != nil || port <= 0 || (hasPath && path == "") {
+			return nil, fmt.Errorf("%q is not name=namespace/service:port or name=namespace/service:port/path", entry)
 		}
-		exposed[name] = agent.Exposed{Namespace: namespace, Service: service, Port: port}
+		if hasPath {
+			path = "/" + path
+		}
+		exposed[name] = agent.Exposed{Namespace: namespace, Service: service, Port: port, Path: path}
 	}
 	return exposed, nil
 }
