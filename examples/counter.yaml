@@ -46,6 +46,10 @@ spec:
     metadata:
       labels:
         app: redis
+      # The tab that runs Redis may open a shell in the pod, as a user
+      # who can read nothing of the volume and write nothing to it.
+      annotations:
+        tabernetes.dev/shell: nobody
     spec:
       runtimeClassName: tab
       priorityClassName: tab-first
@@ -68,6 +72,20 @@ spec:
             - 64mb
             - --maxmemory-policy
             - allkeys-lru
+            # Nobody who connects has a password, since a pod on a tab
+            # can keep no secret. So whoever connects may count a visit
+            # and read the count, and do nothing else: no other key, and
+            # no command that empties Redis or changes its settings.
+            - --user
+            - default
+            - "on"
+            - nopass
+            - "~visits"
+            - "-@all"
+            - "+incr"
+            - "+get"
+            - "+ping"
+            - "+quit"
           ports:
             - containerPort: 6379
           volumeMounts:
@@ -101,6 +119,11 @@ spec:
     metadata:
       labels:
         app: web
+      # The tab that runs the pod may open a shell in it, which is the
+      # tab's own Linux to look around in. Whatever the shell writes
+      # stays in the tab's memory.
+      annotations:
+        tabernetes.dev/shell: nobody
     spec:
       runtimeClassName: tab
       # A DaemonSet decides which nodes get a pod from the pod's
