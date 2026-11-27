@@ -829,8 +829,10 @@ pre {
   }
 
   /* Someone reading on a phone is holding the thing the QR code is
-     for, so the code goes and the button takes its place. */
-  .hero .invite img {
+     for, so the code goes, the line that says to scan the code goes
+     with it, and the button takes their place. */
+  .hero .invite img,
+  .hero .invite .scan {
     display: none;
   }
 
