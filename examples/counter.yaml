@@ -143,6 +143,16 @@ spec:
               cat > /answer <<'ANSWER'
               #!/bin/sh
               read -r method path version
+
+              # The rest of the request, to the empty line that ends
+              # the headers. A connection that is closed with something
+              # unread is reset, and the reset can reach the other end
+              # before the answer does.
+              ended=$(printf '\r')
+              while read -r header && [ -n "$header" ] && [ "$header" != "$ended" ]; do
+                :
+              done
+
               reply() {
                 printf 'HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s' \
                   "$1" "$2" "${#3}" "$3"
