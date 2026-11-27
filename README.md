@@ -49,7 +49,9 @@ Close the tab to leave.
 
 The page also shows the cluster: a globe with a dot for each node that
 can be picked, the Services and the pods behind them, and a button that
-sends a request to a web server on someone's phone.
+sends a request to a web server on someone's phone. Another button has
+every node render a few tiles of one picture, and the page shows whose
+device rendered which.
 
 ## Run a pod in a tab
 
@@ -78,12 +80,13 @@ hello from aarch64 Linux 7.3.4+, in a browser tab
 ```
 
 The guest is aarch64 on every device, so the image needs a
-`linux/arm64` variant. [examples](examples) has two more:
+`linux/arm64` variant. [examples](examples) has three more:
 
-| example           | what it is                                                    |
-| ----------------- | ------------------------------------------------------------- |
-| `counter.yaml`    | a web server on every tab, and the Redis they count visits in |
-| `everywhere.yaml` | a DaemonSet whose pod on every tab tells the time             |
+| example           | what it is                                                     |
+| ----------------- | -------------------------------------------------------------- |
+| `counter.yaml`    | a web server on every tab, and the Redis they count visits in  |
+| `picture.yaml`    | a painter that has those web servers render a picture in tiles |
+| `everywhere.yaml` | a DaemonSet whose pod on every tab tells the time              |
 
 What a tab's pod can have:
 

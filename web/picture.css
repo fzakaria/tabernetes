@@ -1,0 +1,62 @@
+/* The picture the tabs render: the picture itself, the button and what
+   is known of the picture beside it, and under both the devices that
+   rendered a tile. */
+.picture {
+  display: grid;
+  grid-template-columns: minmax(0, 250px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+/* The picture is dark whatever the page's theme, as the set's inside
+   is. The veil lies over the picture and takes no pointer, so that the
+   picture under the veil is what is pointed at. */
+.picture-frame {
+  position: relative;
+  aspect-ratio: 1;
+  background: var(--space);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.picture-frame canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+#picture {
+  cursor: crosshair;
+  touch-action: manipulation;
+}
+
+#picture-veil {
+  pointer-events: none;
+}
+
+.picture-side p {
+  margin: 0 0 10px;
+}
+
+/* The devices, each with how many tiles the device rendered. */
+#picture-devices {
+  margin-top: 12px;
+}
+
+#picture-devices .key {
+  gap: 5px;
+}
+
+#picture-devices .tiles {
+  color: var(--muted);
+}
+
+/* On a phone the picture has the panel's whole width. */
+@media (max-width: 520px) {
+  .picture {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

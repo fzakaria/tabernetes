@@ -35,6 +35,7 @@
     <link rel="apple-touch-icon" href="icon-180.png" />
     <meta name="theme-color" content="#070b16" />
     <link rel="stylesheet" href="site.css" />
+    <link rel="stylesheet" href="picture.css" />
   </head>
   <body>
     <main>
@@ -159,6 +160,26 @@
             <p><button class="button" id="ask">Send a request</button></p>
             <ul class="feed" id="answers"></ul>
           </div>
+          <div class="panel" id="picture-panel" hidden>
+            <h2>Render a picture</h2>
+            <p class="small">
+              One picture, cut into tiles, and every tab's pod renders the tiles it is asked for: a
+              piece of the Mandelbrot set, worked out in awk on the Linux in the tab. Point at a
+              tile to see whose device rendered it.
+            </p>
+            <div class="picture">
+              <div class="picture-frame">
+                <canvas id="picture" aria-label="The picture the tabs rendered"></canvas>
+                <canvas id="picture-veil" aria-hidden="true"></canvas>
+              </div>
+              <div class="picture-side">
+                <p><button class="button" id="paint">Render a picture</button></p>
+                <p class="small" id="picture-caption"></p>
+                <p class="small" id="picture-picked"></p>
+              </div>
+            </div>
+            <div class="legend" id="picture-devices"></div>
+          </div>
           <div class="panel" id="services-panel" hidden>
             <h2>Services</h2>
             <p class="small">
@@ -254,5 +275,6 @@ spec:
       </footer>
     </main>
     <script type="module" src="site.js"></script>
+    <script type="module" src="picture.js"></script>
   </body>
 </html>
