@@ -4,7 +4,7 @@ package web
 
 import "embed"
 
-// Files are the site's pages, styles and scripts.
+// Files are the site's pages, styles, scripts, tables and icons.
 //
-//go:embed *.html *.css *.js *.svg *.json
+//go:embed *.html *.css *.js *.svg *.json *.png
 var Files embed.FS

@@ -56,6 +56,9 @@
 
         # write the tables the site's globe is drawn from, into web/
         globe-data = app (import ./nix/globe-data.nix { inherit pkgs; });
+
+        # draw the site's icon at the sizes browsers and phones ask for
+        icons = app (import ./nix/icons.nix { inherit pkgs; });
       };
 
       checks.${system} = {
