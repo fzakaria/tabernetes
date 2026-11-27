@@ -45,6 +45,7 @@ func testAgentOver(t *testing.T, client kubernetes.Interface, change func(*Confi
 	}
 	agent := New(config)
 	agent.ctx = context.Background()
+	close(agent.ready)
 	return agent
 }
 
@@ -105,6 +106,32 @@ func TestJoinAskedToWaitWhenBusy(t *testing.T) {
 	agent.readVitals()
 	if _, err := agent.Join(context.Background(), tab.Hello{Model: "Pixel 9"}, "198.51.100.1"); !errors.Is(err, ErrBusy) {
 		t.Errorf("with the machine busy: %v", err)
+	}
+}
+
+// TestJoinWaitsForTheAgent checks that a tab is asked to wait, and so
+// asks again by itself, by an agent that has not yet cleared away what
+// an earlier agent left, and by an agent that is stopping: either
+// would make a Node that the clearing, or nobody, then removes.
+func TestJoinWaitsForTheAgent(t *testing.T) {
+	starting := New(Config{
+		Cluster:            kube.Over(fake.NewSimpleClientset()),
+		MaxNodes:           10,
+		MaxNodesPerAddress: 10,
+		StateDir:           t.TempDir(),
+		Log:                log.New(io.Discard, "", 0),
+	})
+	starting.ctx = context.Background()
+	if _, err := starting.Join(context.Background(), tab.Hello{}, "198.51.100.1"); !errors.Is(err, ErrBusy) {
+		t.Errorf("an agent that is still starting: %v", err)
+	}
+
+	stopping := testAgent(t, nil)
+	stopped, stop := context.WithCancel(context.Background())
+	stopping.ctx = stopped
+	stop()
+	if _, err := stopping.Join(context.Background(), tab.Hello{}, "198.51.100.1"); !errors.Is(err, ErrBusy) {
+		t.Errorf("an agent that is stopping: %v", err)
 	}
 }
 

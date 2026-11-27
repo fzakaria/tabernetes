@@ -59,7 +59,7 @@ const (
 // by itself; the other two are for a person to read.
 var (
 	ErrFull        = errors.New("the cluster has all the nodes its machine has room for; try again when someone leaves")
-	ErrBusy        = errors.New("the cluster's machine is busy; this tab asks again in a moment")
+	ErrBusy        = errors.New("the cluster is busy; this tab asks again in a moment")
 	ErrTooManyHere = errors.New("this address already has as many nodes as one address may")
 )
 
@@ -169,6 +169,10 @@ type Agent struct {
 	// for its container to start.
 	listing listing
 
+	// ready is closed once what an earlier agent left has been cleared
+	// away. No tab is taken before then: see Join.
+	ready chan struct{}
+
 	// vitals is the machine as last read, and turns the places at the
 	// machine's part of starting a pod, of which a run takes one.
 	vitals vitals
@@ -252,6 +256,7 @@ func New(config Config) *Agent {
 		pulls:      map[string]*pull{},
 		ledger:     newLedger(config.StateDir, time.Now()),
 		started:    time.Now(),
+		ready:      make(chan struct{}),
 	}
 	if config.StartsAtOnce > 0 {
 		agent.turns = make(chan struct{}, config.StartsAtOnce)
@@ -267,6 +272,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err := a.clearLeftovers(ctx); err != nil {
 		return err
 	}
+	close(a.ready)
 	if err := a.config.Cluster.WatchPods(ctx, a); err != nil {
 		return err
 	}
@@ -401,6 +407,16 @@ func (a *Agent) clearLeftovers(ctx context.Context) error {
 		return fmt.Errorf("listing the nodes: %w", err)
 	}
 	for _, name := range names {
+		// A node this agent has is nobody's leftover. No tab is taken
+		// while this runs, so there should be none; the look costs
+		// nothing, and a live node removed here is a tab that never
+		// gets a pod.
+		a.mu.Lock()
+		own := a.nodes[name] != nil
+		a.mu.Unlock()
+		if own {
+			continue
+		}
 		a.log.Printf("removing node %s, left by an earlier agent", name)
 		a.removeNodeAndPods(ctx, name)
 	}
@@ -453,6 +469,20 @@ func (a *Agent) removeNodeAndPods(ctx context.Context, name string) {
 // Join makes a tab a node. The returned node's messages are for the
 // tab's page, and Leave is to be called when the page is gone.
 func (a *Agent) Join(ctx context.Context, hello tab.Hello, address string) (*Node, error) {
+	// A tab that comes while the agent is clearing away what an earlier
+	// agent left, or while the agent is stopping, is asked to come
+	// back. A tab asks for the name it had before, and the clearing
+	// would take the new Node for the old one and remove it; a Node
+	// made by an agent that is stopping is removed by nobody.
+	select {
+	case <-a.ready:
+	default:
+		return nil, ErrBusy
+	}
+	if a.ctx.Err() != nil {
+		return nil, ErrBusy
+	}
+
 	// A place is taken before the API server is asked, so that a crowd
 	// arriving at once cannot overshoot the limits.
 	a.mu.Lock()
