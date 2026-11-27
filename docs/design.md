@@ -120,6 +120,61 @@ clients the cluster's authority vouches for. k3s must be told to
 connect to kubelets directly (`egress-selector-mode: disabled`): its
 default is a tunnel to the node's k3s agent, which a tab does not have.
 
+## Ready
+
+A pod is Running when tabc says its program has started, and Ready at
+the same moment unless the pod has a readiness probe. The agent makes
+one kind of probe, an HTTP GET from the machine to the pod's address,
+and the pod is Ready while the probe passes. A probe that runs a
+command has no shell to run it in from outside the tab, and a probe
+that only opens a socket would always pass: tabc accepts a connection
+on a pod's port before the program in the guest is listening. That is
+also why a web server without a probe drops the first requests a
+Service sends it.
+
+## The site
+
+The agent serves the cluster's own page (`web/`), which reads one JSON
+description of the cluster every three seconds (`/api/cluster`,
+`internal/agent/view.go`). The description is put together at most
+once a second and served gzipped from memory, so a crowd of readers
+costs the agent one description a second.
+
+What the page shows comes from three places:
+
+- **The agent's own state**: the nodes, each node's pods, and the
+  Services in front of them, which the agent lists every five seconds.
+  That is the topology.
+- **The ledger** (`internal/agent/ledger.go`): counts that begin when
+  the cluster first starts and are kept in a file across restarts, the
+  last 60 events and the last 240 boots. A boot is timed from the tab
+  being told of its container to tabc reporting the program running,
+  to the nearest quarter second.
+- **Counters on the connections** between each tab and its pod's tabc,
+  which is where "carried" comes from: the image's files as the guest
+  reads them, the program's output and the pod's own traffic.
+
+A node's place on the globe is the city its browser's time zone is
+named after (`web/zones.json`, from tzdata), set a little apart from
+other nodes of the same city. The agent never looks an address up, and
+no address is in the description. The land is 1817 dots from Natural
+Earth's outline (`web/land.json`). `nix run .#globe-data` writes both
+tables.
+
+## Asking the cluster
+
+The agent can be started with Services its visitors may send requests
+to (`--expose counter=default/web:8000`). A GET for
+`/apps/counter/...` is carried to that Service's cluster address, and
+the Service passes it to one of its pods, on whoever's phone that is.
+The page's "Ask the cluster" button does this and shows which node
+answered.
+
+Only a GET is carried, only to a Service named when the agent started,
+without the visitor's own headers, and no more than two a second for
+one address. A request that fails is tried again by the page, since
+the pod it was sent to may have just lost its tab.
+
 ## The walls
 
 A pod on a tab is run by a browser nobody vetted. Two things follow.
@@ -164,7 +219,8 @@ every node at once, and the API server with hundreds of Leases.
 
 ## Missing
 
-- `kubectl exec`, probes, init containers, more than one container.
+- `kubectl exec`, liveness probes and probes that are not an HTTP GET,
+  init containers, more than one container.
 - Config maps and secrets, as volumes or as variables.
 - UDP.
 - A pod keeps running through its tab closing only by being started
