@@ -1,0 +1,32 @@
+# k3s's own settings for the cluster's machine (setup.sh puts this at
+# /etc/rancher/k3s/config.yaml).
+
+# The pod range and the Service range. Neither is k3s's default, which
+# overlaps the addresses some hosts give their machines.
+cluster-cidr: 10.244.0.0/16
+service-cidr: 10.96.0.0/16
+cluster-dns: 10.96.0.10
+
+# One bridge is the whole pod network (cluster.conflist), so k3s's own
+# network is off, and no node is given a pod range: there are far more
+# tabs than there are ranges, and every pod is on the one bridge anyway.
+flannel-backend: none
+disable-network-policy: true
+kube-controller-manager-arg:
+  - allocate-node-cidrs=false
+
+# What a machine this small does without.
+disable-cloud-controller: true
+disable:
+  - traefik
+  - servicelb
+  - metrics-server
+  - local-storage
+
+# The API server connects to a kubelet directly. k3s would otherwise
+# send the connection through a tunnel to the node's own k3s agent,
+# and a tab has none: `kubectl logs` of a pod on a tab then fails with
+# a 502 from the tunnel.
+egress-selector-mode: disabled
+
+write-kubeconfig-mode: "644"
