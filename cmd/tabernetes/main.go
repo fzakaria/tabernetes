@@ -29,8 +29,13 @@ import (
 	"github.com/fzakaria/tabernetes/web"
 )
 
-// version is tabernetes's own version, set when the package is built.
-var version = "dev"
+// version is tabernetes's own version, and build the path of the build
+// in the Nix store. Both are set when the package is built, and a
+// plain `go build` has neither.
+var (
+	version = "dev"
+	build   = ""
+)
 
 // What one tab offers the scheduler besides memory: one CPU and room
 // for one pod. One pod a tab keeps "which phone runs what" plain.
@@ -165,10 +170,11 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	server := &http.Server{
-		Addr:    *listen,
-		Handler: tabs.Handler(agent.Site{Pages: web.Files, Share: share, PublicURL: *publicURL}),
+	site, err := tabs.Handler(agent.Site{Pages: web.Files, Share: share, PublicURL: *publicURL, Build: build})
+	if err != nil {
+		return err
 	}
+	server := &http.Server{Addr: *listen, Handler: site}
 	serving := make(chan error, 1)
 	go func() { serving <- server.ListenAndServe() }()
 	logger.Printf("the site is on %s, as %s", *listen, *publicURL)

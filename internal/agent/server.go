@@ -1,8 +1,11 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"html/template"
 	"io/fs"
 	"net"
 	"net/http"
@@ -69,16 +72,64 @@ type Site struct {
 	// alike: the kernel, the SDK, the terminal.
 	Share *Share
 	// PublicURL is the site's address as a visitor types it, which is
-	// what the QR code says.
+	// what the QR code says and what a link preview is fetched from.
 	PublicURL string
+	// Build names the build the agent is, for the foot of the front
+	// page: the build's path in the Nix store.
+	Build string
 }
 
-// Handler returns the agent's HTTP handler.
-func (a *Agent) Handler(site Site) http.Handler {
+// pageData is what one of the site's pages may ask for by name.
+type pageData struct {
+	// PublicURL is the site's address, with no slash at its end.
+	PublicURL string
+	// Build names the build the agent is, or is empty for a build that
+	// was given no name.
+	Build string
+}
+
+// renderPage returns one of the site's pages with its blanks filled
+// in. A page is a template so that a link preview can name the site by
+// its whole address, which only the agent's settings know.
+func renderPage(pages fs.FS, name string, data pageData) ([]byte, error) {
+	page, err := template.ParseFS(pages, name)
+	if err != nil {
+		return nil, fmt.Errorf("the page %s: %w", name, err)
+	}
+	var out bytes.Buffer
+	if err := page.Execute(&out, data); err != nil {
+		return nil, fmt.Errorf("the page %s: %w", name, err)
+	}
+	return out.Bytes(), nil
+}
+
+// servePage answers with a page that was filled in when the agent
+// started. A browser asks again each time, and is told when what the
+// browser has is still the page.
+func (a *Agent) servePage(w http.ResponseWriter, r *http.Request, name string, body []byte) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	http.ServeContent(w, r, name, a.started, bytes.NewReader(body))
+}
+
+// Handler returns the agent's HTTP handler, or an error when one of
+// the site's pages cannot be filled in.
+func (a *Agent) Handler(site Site) (http.Handler, error) {
 	mux := http.NewServeMux()
 	pages := http.FileServerFS(site.Pages)
 	if public, err := url.Parse(site.PublicURL); err == nil && public.Host != "" {
 		a.origins = []string{public.Host}
+	}
+
+	// The two pages, filled in once.
+	data := pageData{PublicURL: strings.TrimRight(site.PublicURL, "/"), Build: site.Build}
+	front, err := renderPage(site.Pages, fileIndex, data)
+	if err != nil {
+		return nil, err
+	}
+	join, err := renderPage(site.Pages, fileJoin, data)
+	if err != nil {
+		return nil, err
 	}
 
 	mux.HandleFunc("GET "+pathSocket, a.serveSocket)
@@ -104,14 +155,20 @@ func (a *Agent) Handler(site Site) http.Handler {
 		for name, value := range isolationHeaders {
 			w.Header().Set(name, value)
 		}
-		http.ServeFileFS(w, r, site.Pages, fileJoin)
+		a.servePage(w, r, fileJoin, join)
 	})
 
-	// Everything else is a page of the site's. The pattern names no
-	// method, since one that did would overlap the containers' pattern
-	// above without being more specific than it.
-	mux.Handle("/", pages)
-	return mux
+	// Everything else is the front page or a file of the site's. The
+	// pattern names no method, since one that did would overlap the
+	// containers' pattern above without being more specific than it.
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			a.servePage(w, r, fileIndex, front)
+			return
+		}
+		pages.ServeHTTP(w, r)
+	})
+	return mux, nil
 }
 
 // serveSocket is one tab's whole time as a node: the tab says what it

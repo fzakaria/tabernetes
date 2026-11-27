@@ -18,6 +18,9 @@ pkgs.buildGoModule {
     "-s"
     "-w"
     "-X main.version=${go.version}"
+    # The build's own path in the store, which the front page shows at
+    # its foot.
+    "-X main.build=${placeholder "out"}"
   ];
 
   # Every package's tests, not only the command's.

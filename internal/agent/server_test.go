@@ -19,6 +19,17 @@ import (
 // cluster: the routes under test ask nothing of one.
 func testSite(t *testing.T) (http.Handler, *Share) {
 	t.Helper()
+	pages := fstest.MapFS{
+		"index.html": {Data: []byte("front page")},
+		"join.html":  {Data: []byte("join page")},
+	}
+	return testSiteOf(t, pages, Site{PublicURL: "https://cluster.example"})
+}
+
+// testSiteOf returns an agent's handler over the same share as
+// testSite, with the pages and the site's settings the test gives.
+func testSiteOf(t *testing.T, pages fstest.MapFS, site Site) (http.Handler, *Share) {
+	t.Helper()
 	dir := t.TempDir()
 	for name, contents := range map[string]string{
 		"unkernel/unkernel.wasm": strings.Repeat("kernel ", 1000),
@@ -38,12 +49,13 @@ func testSite(t *testing.T) (http.Handler, *Share) {
 		t.Fatal(err)
 	}
 
-	pages := fstest.MapFS{
-		"index.html": {Data: []byte("front page")},
-		"join.html":  {Data: []byte("join page")},
-	}
+	site.Pages, site.Share = pages, share
 	agent := New(Config{Log: log.New(io.Discard, "", 0), MaxNodes: 3, StateDir: t.TempDir()})
-	return agent.Handler(Site{Pages: pages, Share: share, PublicURL: "https://cluster.example"}), share
+	handler, err := agent.Handler(site)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return handler, share
 }
 
 // get asks the handler for a path.
@@ -55,6 +67,48 @@ func get(handler http.Handler, path string, header map[string]string) *httptest.
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	return response
+}
+
+// TestPagesAreFilledIn checks that a page is served with the site's
+// public address and the build's name written where the page asks for
+// them, which is what a link preview and the footer are made of: by
+// serving a front page and a join page that ask for both, from a site
+// whose address was given with a slash at its end.
+func TestPagesAreFilledIn(t *testing.T) {
+	pages := fstest.MapFS{
+		"index.html": {Data: []byte(`<meta content="{{.PublicURL}}/card.png" /><code>{{.Build}}</code>`)},
+		"join.html":  {Data: []byte(`<a href="{{.PublicURL}}/">{{.Build}}</a>`)},
+	}
+	handler, _ := testSiteOf(t, pages, Site{PublicURL: "https://cluster.example/", Build: "/nix/store/abc-tabernetes"})
+
+	front := get(handler, "/", nil)
+	want := `<meta content="https://cluster.example/card.png" /><code>/nix/store/abc-tabernetes</code>`
+	if front.Code != http.StatusOK || front.Body.String() != want {
+		t.Errorf("/: %d %q", front.Code, front.Body.String())
+	}
+	if got := front.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/html") {
+		t.Errorf("/ content type %q", got)
+	}
+
+	join := get(handler, "/join", nil)
+	want = `<a href="https://cluster.example/">/nix/store/abc-tabernetes</a>`
+	if join.Code != http.StatusOK || join.Body.String() != want {
+		t.Errorf("/join: %d %q", join.Code, join.Body.String())
+	}
+}
+
+// TestPageThatDoesNotParse checks that a page with a blank the agent
+// cannot fill is found when the handler is made, not when a visitor
+// asks for the page: by making a handler over such a front page.
+func TestPageThatDoesNotParse(t *testing.T) {
+	pages := fstest.MapFS{
+		"index.html": {Data: []byte("{{.NoSuchField}}")},
+		"join.html":  {Data: []byte("join page")},
+	}
+	agent := New(Config{Log: log.New(io.Discard, "", 0), MaxNodes: 3, StateDir: t.TempDir()})
+	if _, err := agent.Handler(Site{Pages: pages}); err == nil {
+		t.Error("a page with an unknown blank made a handler")
+	}
 }
 
 // TestPages checks that the site's routes can be registered together,
