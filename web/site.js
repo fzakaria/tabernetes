@@ -4,6 +4,7 @@
 import { MACHINE, createGlobe } from "./globe.js";
 import { colors, createTopology } from "./topology.js";
 import {
+  MS_PER_SECOND,
   NONE,
   bytes,
   city,
@@ -12,6 +13,7 @@ import {
   duration,
   flag,
   known,
+  latency,
   median,
   seconds,
 } from "./format.js";
@@ -51,6 +53,17 @@ const FLAGS_SHOWN = 14;
 // The boot chart's bars: one for each second up to the last, which
 // takes every boot longer than that.
 const BOOT_BARS = 10;
+
+// The latency chart's bars, each named by the least time a request in
+// the bar took, in milliseconds: a bar's requests took that long and
+// less than the next bar's time, and the last bar takes every request
+// slower still. Each time is twice the one before, since most
+// requests are quick and a few take many times as long.
+const ASK_BARS_MS = [0, 25, 50, 100, 200, 400, 800, 1600, 3200];
+
+// What the agent answers a request with when no pod answered the
+// request (internal/agent/ask.go).
+const NO_ANSWER_STATUS = 502;
 
 const SECONDS_PER_HOUR = 3600;
 
@@ -298,6 +311,68 @@ function barRow(name, value, most, color) {
   return row;
 }
 
+// The columns of a chart of bars standing up: over each bar the number
+// the bar stands for, and under each bar a name.
+function columns(numbers, names) {
+  const most = Math.max(1, ...numbers);
+  return numbers.map((number, index) => {
+    const column = make("div", "column");
+    column.append(make("span", "column-value", number > 0 ? String(number) : ""));
+    const bar = make("span", "bar");
+    bar.style.height = `${(100 * number) / most}%`;
+    column.append(bar);
+    column.append(make("span", "column-name", names[index]));
+    return column;
+  });
+}
+
+function renderAsks(view) {
+  // The requests sent to the Service the page's button asks, and of
+  // those the ones a pod answered. A request no pod answered has no
+  // latency to chart: the request was refused at once, or ran out of
+  // time.
+  const asks = view.asks.filter((ask) => ask.app === ASK_NAME);
+  const answered = asks.filter((ask) => ask.status !== NO_ANSWER_STATUS);
+  byId("asks-panel").hidden = !view.exposed.includes(ASK_NAME);
+  byId("asks-count").textContent = asks.length;
+  byId("asks").hidden = answered.length === 0;
+  byId("asks-empty").hidden = answered.length > 0;
+
+  // Each answered request goes in the last bar whose time the request
+  // took at least.
+  const bars = new Array(ASK_BARS_MS.length).fill(0);
+  for (const ask of answered) {
+    const ms = ask.seconds * MS_PER_SECOND;
+    bars[ASK_BARS_MS.findLastIndex((least) => ms >= least)]++;
+  }
+  // Each bar is named by its time alone, without the unit, which the
+  // words over the chart give: nine names with units are wider than a
+  // phone's screen.
+  const names = ASK_BARS_MS.map((least, index) =>
+    index === ASK_BARS_MS.length - 1 ? `${least}+` : String(least),
+  );
+  byId("asks").replaceChildren(...columns(bars, names));
+
+  // What the bars do not say: the middle, the worst, and how many
+  // requests are not in a bar at all.
+  const times = answered.map((ask) => ask.seconds);
+  const facts = [];
+  if (times.length > 0) {
+    facts.push(["median", latency(median(times))], ["slowest", latency(Math.max(...times))]);
+  }
+  if (asks.length > answered.length) {
+    facts.push(["no pod answered", `${asks.length - answered.length} of ${asks.length}`]);
+  }
+  byId("asks-facts").replaceChildren(
+    ...facts.map(([what, value]) => {
+      const item = make("li");
+      item.append(make("span", "what", what));
+      item.append(make("span", "when", value));
+      return item;
+    }),
+  );
+}
+
 function renderBoots(view) {
   byId("boots-count").textContent = view.boots.length;
   byId("boots").hidden = view.boots.length === 0;
@@ -308,20 +383,8 @@ function renderBoots(view) {
   for (const boot of view.boots) {
     bars[Math.min(BOOT_BARS - 1, Math.floor(boot.seconds))]++;
   }
-  const most = Math.max(1, ...bars);
-  byId("boots").replaceChildren(
-    ...bars.map((number, index) => {
-      const column = make("div", "column");
-      column.append(make("span", "column-value", number > 0 ? String(number) : ""));
-      const bar = make("span", "bar");
-      bar.style.height = `${(100 * number) / most}%`;
-      column.append(bar);
-      column.append(
-        make("span", "column-name", index === BOOT_BARS - 1 ? `${index}s+` : `${index}s`),
-      );
-      return column;
-    }),
-  );
+  const names = bars.map((_, index) => (index === BOOT_BARS - 1 ? `${index}s+` : `${index}s`));
+  byId("boots").replaceChildren(...columns(bars, names));
 
   // The devices, fastest first.
   const byDevice = new Map();
@@ -584,6 +647,7 @@ function render(view) {
   renderTiles(view);
   renderEvents(view);
   renderBoots(view);
+  renderAsks(view);
   renderFleet(view);
   renderLegend(view);
   renderNodes(view);
@@ -641,7 +705,7 @@ async function ask() {
       await new Promise((resolve) => setTimeout(resolve, ASK_RETRY_MS));
     }
   }
-  answers.unshift({ text, node, took: `${Math.round(performance.now() - began)} ms` });
+  answers.unshift({ text, node, took: latency((performance.now() - began) / MS_PER_SECOND) });
   answers.length = Math.min(answers.length, ANSWERS_SHOWN);
   renderAnswers();
 

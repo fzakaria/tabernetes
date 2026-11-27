@@ -16,6 +16,10 @@ const SIZES = [
   ["kB", 1e3],
 ];
 
+// The milliseconds in a second, for a time the agent gives in seconds
+// and the page shows in milliseconds.
+export const MS_PER_SECOND = 1000;
+
 // What stands where there is nothing to say, and what the agent writes
 // where a browser said nothing.
 export const NONE = "-";
@@ -60,6 +64,12 @@ export function bytes(count) {
 // A number of seconds with one decimal, for a boot.
 export function seconds(value) {
   return `${value.toFixed(1)} s`;
+}
+
+// A number of seconds as whole milliseconds, for a request's answer,
+// and as seconds once the answer took a second or more.
+export function latency(value) {
+  return value < 1 ? `${Math.round(value * MS_PER_SECOND)} ms` : seconds(value);
 }
 
 // A whole number with separators.
