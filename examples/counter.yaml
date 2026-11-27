@@ -224,7 +224,7 @@ spec:
                   pixels=$(awk -v picture="$picture" -v side="$side" -v tile="$tile" -f /tile.awk); then
                   reply "200 OK" application/json "{\"node\": \"$NODE_NAME\", \"pixels\": \"$pixels\"}"
                   printf . >> /tmp/tiles
-                  echo "tile $((tile + 1)) of $((side * side)) in picture $picture was rendered here, on $NODE_NAME" >&2
+                  echo "tile $((tile + 1)) of $((side * side)) rendered here" >&2
                 else
                   reply "404 Not Found" text/plain "no such tile"
                 fi
@@ -234,7 +234,7 @@ spec:
               visit=$(printf 'INCR visits\r\nQUIT\r\n' | nc -w 5 redis 6379 | head -n 1 | tr -dc 0-9)
               if [ -z "$visit" ]; then
                 reply "503 Service Unavailable" text/plain "Redis did not answer"
-                echo "a request came, and Redis did not answer" >&2
+                echo "Redis did not answer a request" >&2
                 exit
               fi
               if [ "$path" = /json ]; then
@@ -244,7 +244,7 @@ spec:
               "
               fi
               printf . >> /tmp/answered
-              echo "visit $visit was answered here, on $NODE_NAME" >&2
+              echo "visit $visit answered here" >&2
               ANSWER
               chmod +x /answer
 
@@ -316,13 +316,30 @@ spec:
               : > /tmp/answered
               : > /tmp/tiles
 
-              echo "Linux $(uname -r) on $(uname -m), booted in the tab that is node $NODE_NAME."
-              echo "This pod is a web server behind the cluster's Service \"web\"."
-              echo "When someone presses \"Send a request\" on the cluster's page and the"
-              echo "Service picks this pod, the request is answered on this device. When"
-              echo "someone presses \"Render a picture\", this device renders some of the"
-              echo "picture's tiles. Each request and each tile adds a line below."
-              echo
+              # What the tab's terminal opens with. A phone's terminal is
+              # about 36 columns wide and breaks a longer line in the middle
+              # of a word, so no line here, and no line /answer writes to
+              # the terminal, is longer than 32 columns.
+              cat <<BANNER
+              Linux $(uname -r) on $(uname -m),
+              booted in a browser tab.
+              This tab is the node
+              $NODE_NAME.
+
+              This pod is a web server behind
+              the cluster's Service "web".
+
+              When someone presses "Send a
+              request" on the cluster's page
+              and the Service picks this pod,
+              this device answers. "Render a
+              picture" has this device render
+              some of the picture's tiles.
+
+              Each request and each tile adds
+              a line below.
+
+              BANNER
               exec nc -lk -p 8000 -e /answer
 ---
 apiVersion: v1
