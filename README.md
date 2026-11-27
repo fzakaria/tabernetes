@@ -47,11 +47,6 @@ press Join. The tab becomes a node, named after the device, and shows
 the pod it was given: a terminal on a Linux that is running in the tab.
 Close the tab to leave.
 
-It needs Chrome 137, Firefox 153 or Safari 27, or newer. Joining
-downloads about 5 MB once, most of it the kernel from jsDelivr, and
-uses one core and about 200 MB of the device's memory while the tab is
-open.
-
 The page also shows the cluster: a globe with a dot for each node that
 can be picked, the Services and the pods behind them, and a button that
 sends a request to a web server on someone's phone.
@@ -151,16 +146,6 @@ and open the address.
 How many nodes the cluster takes is the machine's to say: a node costs
 it about 9 MB, and the agent turns tabs away once less than 1 GB of
 memory is spare, whatever `MAX_NODES` is.
-
-A resident is a headless browser on the machine itself with the join
-page open, so that a lone visitor finds a cluster with nodes in it.
-Residents are named `resident-xxxx`, marked on the page, left out of
-its totals, and give their places up when the cluster is full.
-
-The cluster's page draws each node on a globe, roughly where its
-address is: a city, from DB-IP's free database, which setup.sh fetches
-onto the machine. No address leaves the machine or reaches the page.
-Without the database a node is drawn at its browser's time zone's city.
 
 ## Hacking
 
