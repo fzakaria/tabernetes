@@ -333,7 +333,7 @@ main > h2 {
 
 .tip {
   position: relative;
-  cursor: help;
+  cursor: default;
   outline: none;
   text-decoration: underline dotted;
   text-underline-offset: 3px;
