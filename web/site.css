@@ -910,6 +910,13 @@ body.node main {
   gap: 12px;
 }
 
+/* With no pod to show, the list takes no room, and the foot of the page
+   comes up under the status line: a tab that has left has nothing to
+   keep a screen's height open for. */
+.pods:empty {
+  display: none;
+}
+
 .pod {
   /* As tall as what the card holds, and taller when the page has room:
      a card that could shrink would hide its top under an open shell. */
