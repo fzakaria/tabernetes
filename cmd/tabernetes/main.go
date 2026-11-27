@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -83,6 +84,8 @@ func run() error {
 		kubeletKey    = flag.String("kubelet-key", "/var/lib/rancher/k3s/agent/serving-kubelet.key", "the certificate's key")
 		kubeletCA     = flag.String("kubelet-client-ca", "/var/lib/rancher/k3s/agent/client-ca.crt", "the authority whose clients may make kubelet requests: the API server's")
 		runtimeClass  = flag.String("runtime-class", "tab", "the RuntimeClass whose pods run in tabs")
+		zone          = flag.String("zone", "", "the time zone the machine is in, where the site's map puts the cluster (as America/Los_Angeles)")
+		expose        = flag.String("expose", "", "Services a visitor of the site may send requests to, as name=namespace/service:port, separated by commas")
 		showVersion   = flag.Bool("version", false, "print the version and exit")
 	)
 	flag.Parse()
@@ -129,6 +132,11 @@ func run() error {
 	}
 	logger.Printf("tabernetes %s: API server %s, tabc %s, reachable at %s", version, serverVersion, tabcVersion, *address)
 
+	exposed, err := parseExposed(*expose)
+	if err != nil {
+		return fmt.Errorf("--expose: %w", err)
+	}
+
 	tabs := agent.New(agent.Config{
 		Cluster: cluster,
 		Tabc:    tabc,
@@ -148,6 +156,8 @@ func run() error {
 		MaxNodesPerAddress: *maxPerAddress,
 		RuntimeClass:       *runtimeClass,
 		StateDir:           *stateDir,
+		Zone:               *zone,
+		Exposed:            exposed,
 		Log:                logger,
 	})
 
@@ -193,6 +203,27 @@ func run() error {
 		server.Shutdown(shutdown)
 		return err
 	}
+}
+
+// parseExposed reads the Services a visitor may send requests to:
+// "counter=default/web:8000", and more of the same after commas.
+func parseExposed(text string) (map[string]agent.Exposed, error) {
+	exposed := map[string]agent.Exposed{}
+	for _, entry := range strings.Split(text, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		name, target, hasName := strings.Cut(entry, "=")
+		namespace, rest, hasNamespace := strings.Cut(target, "/")
+		service, portText, hasPort := strings.Cut(rest, ":")
+		port, err := strconv.Atoi(portText)
+		if !hasName || !hasNamespace || !hasPort || name == "" || namespace == "" || service == "" || err != nil || port <= 0 {
+			return nil, fmt.Errorf("%q is not name=namespace/service:port", entry)
+		}
+		exposed[name] = agent.Exposed{Namespace: namespace, Service: service, Port: port}
+	}
+	return exposed, nil
 }
 
 // kubeletServer returns a server for the API server's kubelet requests.

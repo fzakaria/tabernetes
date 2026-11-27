@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/fzakaria/tabernetes/internal/kube"
 	"github.com/fzakaria/tabernetes/internal/runtime"
+	"github.com/fzakaria/tabernetes/internal/tab"
 )
 
 // bootTimeout is how long a tab gets to boot the guest and start the
@@ -25,10 +27,10 @@ const bootTimeout = 2 * time.Minute
 
 // pollEvery is how often a run asks whether its container has started,
 // and listingAge how old the shared `tabc list` may be before a run
-// asks tabc again.
+// asks tabc again. A boot's time is measured no finer than this.
 const (
-	pollEvery  = 500 * time.Millisecond
-	listingAge = 400 * time.Millisecond
+	pollEvery  = 250 * time.Millisecond
+	listingAge = 200 * time.Millisecond
 )
 
 // The wait before a program that ended is started again: the first
@@ -79,6 +81,19 @@ type run struct {
 	// long as there is a container.
 	pageMu sync.Mutex
 	proxy  *httputil.ReverseProxy
+
+	// What the site shows of the run: the pod's address, whether its
+	// program is running, and how long the tab took to start it.
+	ip      string
+	running bool
+	boot    time.Duration
+
+	// down and up count the bytes that have gone to the tab and come
+	// from it, over every container of the run, and carried is what
+	// the page's connections report those bytes to.
+	down    atomic.Int64
+	up      atomic.Int64
+	carried func(down, up int64)
 }
 
 // pull is one image being fetched, or fetched.
@@ -150,6 +165,11 @@ func (a *Agent) start(pod *corev1.Pod, node *Node) {
 		id:     randomHex(containerIDBytes),
 		cancel: cancel,
 		done:   make(chan struct{}),
+	}
+	started.carried = func(down, up int64) {
+		started.down.Add(down)
+		started.up.Add(up)
+		a.ledger.carried(down + up)
 	}
 	a.runs[pod.UID] = started
 	a.containers[started.id] = started
@@ -359,19 +379,70 @@ func (a *Agent) runContainer(ctx context.Context, r *run, sandbox *runtime.Sandb
 		Pod:   r.pod.Namespace + "/" + r.pod.Name,
 		Image: plan.Image,
 	})
+	told := time.Now()
 	if err := a.waitRunning(ctx, r.id, container); err != nil {
 		return 0, &failure{reasonBoot, err}
 	}
 	snapshot.Stage = kube.StageRunning
 	snapshot.Started = metav1.Now()
 	snapshot.Reason, snapshot.Message = "", ""
+
+	// A pod with a readiness probe is running and not yet ready, and
+	// the probe says when it is.
+	probe, probed := runtime.ProbeFor(r.pod.Spec.Containers[0])
+	snapshot.Unready = probed
 	report()
+	if probed {
+		// The watch is over before this returns: the snapshot is the
+		// run's again from then on.
+		watching, stop := context.WithCancel(ctx)
+		stopped := make(chan struct{})
+		go func() {
+			defer close(stopped)
+			a.watchReadiness(watching, probe, sandbox.IP, snapshot, report)
+		}()
+		defer func() {
+			stop()
+			<-stopped
+		}()
+	}
+
+	// For the site: the program runs, after a boot of this length.
+	boot := time.Since(told)
+	r.show(sandbox.IP, true, boot)
+	defer r.show(sandbox.IP, false, boot)
+	a.ledger.started(r.node.Name, r.pod.Namespace+"/"+r.pod.Name,
+		tab.LabelValue(r.node.Hello.Platform), tab.LabelValue(r.node.Hello.Model), boot, time.Now())
 
 	select {
 	case <-container.Done():
 		return container.Exit(), nil
 	case <-ctx.Done():
 		return 0, nil
+	}
+}
+
+// watchReadiness makes a pod's readiness probe over and over until the
+// context ends, and writes the pod's status each time the answer
+// changes. The snapshot is the run's own, which the run does not touch
+// again until this has been stopped.
+func (a *Agent) watchReadiness(ctx context.Context, probe runtime.Probe, address string, snapshot *kube.Snapshot, report func()) {
+	ticker := time.NewTicker(probe.Period)
+	defer ticker.Stop()
+	for {
+		unready := probe.Passes(ctx, address) != nil
+		if ctx.Err() != nil {
+			return
+		}
+		if unready != snapshot.Unready {
+			snapshot.Unready = unready
+			report()
+		}
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			return
+		}
 	}
 }
 
@@ -466,10 +537,24 @@ func (a *Agent) pullOnce(ctx context.Context, image string) error {
 	}
 }
 
+// show records what the site shows of the run.
+func (r *run) show(ip string, running bool, boot time.Duration) {
+	r.pageMu.Lock()
+	defer r.pageMu.Unlock()
+	r.ip, r.running, r.boot = ip, running, boot
+}
+
+// shown returns what the site shows of the run.
+func (r *run) shown() (ip string, running bool, boot time.Duration) {
+	r.pageMu.Lock()
+	defer r.pageMu.Unlock()
+	return r.ip, r.running, r.boot
+}
+
 // setPage records where the run's container page is: the address tabc
 // serves the page on, and the sandbox the address is reached from.
 func (r *run) setPage(link *url.URL, sandbox *runtime.Sandbox) {
-	proxy := newPageProxy(r.id, link, sandbox)
+	proxy := newPageProxy(r.id, link, sandbox, r.carried)
 	r.pageMu.Lock()
 	defer r.pageMu.Unlock()
 	r.proxy = proxy

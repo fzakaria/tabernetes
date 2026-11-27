@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -78,7 +77,20 @@ type Config struct {
 	RuntimeClass string
 	// StateDir is where each pod's log and volumes are kept.
 	StateDir string
-	Log      *log.Logger
+	// Zone is the time zone the machine is in, which is where the
+	// site's map puts the cluster itself.
+	Zone string
+	// Exposed are the Services the site's visitors may send requests
+	// to, by the name each is exposed under.
+	Exposed map[string]Exposed
+	Log     *log.Logger
+}
+
+// Exposed is one Service the site's visitors may send requests to.
+type Exposed struct {
+	Namespace string
+	Service   string
+	Port      int
 }
 
 // Agent holds the tabs that are nodes and the pods that run on them.
@@ -99,10 +111,19 @@ type Agent struct {
 	containers map[string]*run
 	// pulls are the images fetched or being fetched, by reference.
 	pulls map[string]*pull
-	// peakNodes is the most nodes there have been at once.
-	peakNodes int
 	// logs are where pods' logs are, by "namespace/name".
 	logs map[string]string
+	// services are the cluster's Services, as last listed.
+	services []kube.Service
+
+	// ledger is the record of what has happened, started is when this
+	// agent began, and view is the cluster as the site was last told.
+	ledger  *ledger
+	started time.Time
+	view    cachedView
+	// askers limit how often each visitor may send a request into the
+	// cluster.
+	askers askers
 
 	// origins are the hosts whose pages may open a tab's socket.
 	origins []string
@@ -170,6 +191,8 @@ func New(config Config) *Agent {
 		runs:       map[types.UID]*run{},
 		containers: map[string]*run{},
 		pulls:      map[string]*pull{},
+		ledger:     newLedger(config.StateDir, time.Now()),
+		started:    time.Now(),
 	}
 }
 
@@ -186,16 +209,54 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 	a.log.Printf("watching for pods; up to %d nodes", a.config.MaxNodes)
 
-	ticker := time.NewTicker(renewEvery)
-	defer ticker.Stop()
+	renewals := time.NewTicker(renewEvery)
+	defer renewals.Stop()
+	listings := time.NewTicker(servicesEvery)
+	defer listings.Stop()
+	saves := time.NewTicker(saveEvery)
+	defer saves.Stop()
+	a.listServices(ctx)
 	for {
 		select {
-		case <-ticker.C:
+		case <-renewals.C:
 			a.renew(ctx)
+		case <-listings.C:
+			a.listServices(ctx)
+		case <-saves.C:
+			a.saveLedger()
 		case <-ctx.Done():
 			a.removeAll()
+			a.saveLedger()
 			return nil
 		}
+	}
+}
+
+// How often the Services are listed again, for the site's picture of
+// the cluster, and how often the ledger is written to its file.
+const (
+	servicesEvery = 5 * time.Second
+	saveEvery     = 30 * time.Second
+)
+
+// listServices reads the cluster's Services.
+func (a *Agent) listServices(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+	services, err := a.config.Cluster.Services(ctx)
+	if err != nil {
+		a.log.Printf("listing the services: %v", err)
+		return
+	}
+	a.mu.Lock()
+	a.services = services
+	a.mu.Unlock()
+}
+
+// saveLedger writes the ledger's totals to their file.
+func (a *Agent) saveLedger() {
+	if err := a.ledger.save(a.config.StateDir); err != nil {
+		a.log.Printf("saving the ledger: %v", err)
 	}
 }
 
@@ -299,14 +360,24 @@ func (a *Agent) Join(ctx context.Context, hello tab.Hello, address string) (*Nod
 		a.mu.Unlock()
 		return nil, err
 	}
-	if len(a.nodes) > a.peakNodes {
-		a.peakNodes = len(a.nodes)
-	}
-	count := len(a.nodes)
+	count := a.named()
 	a.mu.Unlock()
 
+	a.ledger.joined(node.Name, count, node.Joined)
 	a.log.Printf("node %s joined from %s (%s); %d nodes", node.Name, address, hello.Describe(), count)
 	return node, nil
+}
+
+// named returns how many nodes there are, leaving out the tabs whose
+// Node is still being made. The caller holds the agent's lock.
+func (a *Agent) named() int {
+	count := 0
+	for name := range a.nodes {
+		if !strings.HasPrefix(name, placeholderPrefix) {
+			count++
+		}
+	}
+	return count
 }
 
 // placeholderPrefix starts the name a tab's place is held under while
@@ -361,14 +432,17 @@ func (a *Agent) Leave(node *Node) {
 	}
 	delete(a.nodes, node.Name)
 	var running []*run
+	var moved []string
 	for _, candidate := range a.runs {
 		if candidate.node == node {
 			running = append(running, candidate)
+			moved = append(moved, candidate.pod.Namespace+"/"+candidate.pod.Name)
 		}
 	}
 	count := len(a.nodes)
 	a.mu.Unlock()
 	node.lose()
+	a.ledger.left(node.Name, time.Since(node.Joined), moved, time.Now())
 
 	// The node goes first and its pods after. A pod's controller makes
 	// a new pod the moment the old one is gone, and the scheduler must
@@ -443,59 +517,11 @@ func (n *Node) lose() {
 	n.loseOnce.Do(func() { close(n.lost) })
 }
 
-// NodeView is a node as the site shows one.
-type NodeView struct {
-	Name     string    `json:"name"`
-	Platform string    `json:"platform"`
-	Browser  string    `json:"browser"`
-	Model    string    `json:"model"`
-	Joined   time.Time `json:"joined"`
-	// Pods are the pods on the node, as "namespace/name".
-	Pods []string `json:"pods"`
-}
-
-// View is the cluster as the site shows it.
-type View struct {
-	Nodes     []NodeView `json:"nodes"`
-	Pods      int        `json:"pods"`
-	MaxNodes  int        `json:"maxNodes"`
-	PeakNodes int        `json:"peakNodes"`
-}
-
-// Snapshot returns the nodes, oldest first, with the pods on each.
-func (a *Agent) Snapshot() View {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	view := View{Nodes: []NodeView{}, Pods: len(a.runs), MaxNodes: a.config.MaxNodes, PeakNodes: a.peakNodes}
-	for name, node := range a.nodes {
-		if strings.HasPrefix(name, placeholderPrefix) {
-			continue
-		}
-		entry := NodeView{
-			Name:     node.Name,
-			Platform: tab.LabelValue(node.Hello.Platform),
-			Browser:  tab.LabelValue(node.Hello.Browser),
-			Model:    tab.LabelValue(node.Hello.Model),
-			Joined:   node.Joined,
-			Pods:     []string{},
-		}
-		for _, candidate := range a.runs {
-			if candidate.node == node {
-				entry.Pods = append(entry.Pods, candidate.pod.Namespace+"/"+candidate.pod.Name)
-			}
-		}
-		view.Nodes = append(view.Nodes, entry)
-	}
-	sort.Slice(view.Nodes, func(i, j int) bool { return view.Nodes[i].Joined.Before(view.Nodes[j].Joined) })
-	return view
-}
-
 // Counts returns how many nodes and pods there are.
 func (a *Agent) Counts() (nodes, pods int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return len(a.nodes), len(a.runs)
+	return a.named(), len(a.runs)
 }
 
 // randomHex returns that many random bytes, as hex.

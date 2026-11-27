@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io/fs"
 	"net"
@@ -94,6 +93,7 @@ func (a *Agent) Handler(site Site) http.Handler {
 		w.Write(image)
 	})
 	mux.Handle("GET "+pathStatic, site.Share)
+	mux.HandleFunc(pathApps, a.serveApp)
 	mux.HandleFunc(containerPrefix, func(w http.ResponseWriter, r *http.Request) {
 		a.serveContainer(w, r, site.Share)
 	})
@@ -112,13 +112,6 @@ func (a *Agent) Handler(site Site) http.Handler {
 	// above without being more specific than it.
 	mux.Handle("/", pages)
 	return mux
-}
-
-// serveCluster answers with the nodes and their pods.
-func (a *Agent) serveCluster(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	json.NewEncoder(w).Encode(a.Snapshot())
 }
 
 // serveSocket is one tab's whole time as a node: the tab says what it
@@ -272,7 +265,7 @@ func (a *Agent) serveContainer(w http.ResponseWriter, r *http.Request, share *Sh
 // newPageProxy returns what carries a tab's requests to a container's
 // tabc: to tabc's page server, on the loopback of the pod's sandbox,
 // with the container's secret in place of the container's id.
-func newPageProxy(id string, link *url.URL, sandbox *runtime.Sandbox) *httputil.ReverseProxy {
+func newPageProxy(id string, link *url.URL, sandbox *runtime.Sandbox, carried func(down, up int64)) *httputil.ReverseProxy {
 	prefix := containerPath(id)
 	return &httputil.ReverseProxy{
 		Rewrite: func(request *httputil.ProxyRequest) {
@@ -297,7 +290,11 @@ func newPageProxy(id string, link *url.URL, sandbox *runtime.Sandbox) *httputil.
 		// the sandbox.
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				return sandbox.Dial(ctx, link.Host)
+				conn, err := sandbox.Dial(ctx, link.Host)
+				if err != nil {
+					return nil, err
+				}
+				return &countedConn{Conn: conn, carried: carried}, nil
 			},
 			MaxIdleConnsPerHost: pageIdleConnections,
 			IdleConnTimeout:     pageIdleTimeout,
@@ -321,3 +318,30 @@ const (
 	pageIdleConnections = 8
 	pageIdleTimeout     = 30 * time.Second
 )
+
+// countedConn is a connection to a container's tabc that reports how
+// much passes over it: what is read came from tabc and goes down to the
+// tab, and what is written came up from the tab.
+type countedConn struct {
+	net.Conn
+	carried func(down, up int64)
+}
+
+// Read reads from tabc and counts what was read as sent to the tab.
+func (c *countedConn) Read(buffer []byte) (int, error) {
+	n, err := c.Conn.Read(buffer)
+	if n > 0 {
+		c.carried(int64(n), 0)
+	}
+	return n, err
+}
+
+// Write writes to tabc and counts what was written as come from the
+// tab.
+func (c *countedConn) Write(buffer []byte) (int, error) {
+	n, err := c.Conn.Write(buffer)
+	if n > 0 {
+		c.carried(0, int64(n))
+	}
+	return n, err
+}

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"compress/gzip"
+	"encoding/json"
 	"io"
 	"log"
 	"net/http"
@@ -41,7 +42,7 @@ func testSite(t *testing.T) (http.Handler, *Share) {
 		"index.html": {Data: []byte("front page")},
 		"join.html":  {Data: []byte("join page")},
 	}
-	agent := New(Config{Log: log.New(io.Discard, "", 0), MaxNodes: 3})
+	agent := New(Config{Log: log.New(io.Discard, "", 0), MaxNodes: 3, StateDir: t.TempDir()})
 	return agent.Handler(Site{Pages: pages, Share: share, PublicURL: "https://cluster.example"}), share
 }
 
@@ -77,14 +78,60 @@ func TestPages(t *testing.T) {
 	}
 }
 
-// TestCluster checks that the cluster's description is JSON with no
-// nodes and the agent's limit, for an agent nothing has joined.
+// TestCluster checks the cluster's description for an agent nothing
+// has joined: JSON with no nodes, the agent's limit, and totals that
+// begin now, and the same JSON gzipped for a browser that takes gzip.
 func TestCluster(t *testing.T) {
 	handler, _ := testSite(t)
 	response := get(handler, "/api/cluster", nil)
-	body := strings.TrimSpace(response.Body.String())
-	if response.Code != http.StatusOK || body != `{"nodes":[],"pods":0,"maxNodes":3,"peakNodes":0}` {
-		t.Errorf("%d %s", response.Code, body)
+	if response.Code != http.StatusOK {
+		t.Fatalf("%d", response.Code)
+	}
+	var view View
+	if err := json.Unmarshal(response.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	if len(view.Nodes) != 0 || view.MaxNodes != 3 || view.Totals.Joins != 0 || view.Totals.Since.IsZero() {
+		t.Errorf("%+v", view)
+	}
+	if !strings.Contains(response.Body.String(), `"nodes":[]`) || !strings.Contains(response.Body.String(), `"events":[]`) {
+		t.Errorf("empty lists are not lists: %s", response.Body.String())
+	}
+
+	zipped := get(handler, "/api/cluster", map[string]string{"Accept-Encoding": "gzip"})
+	reader, err := gzip.NewReader(zipped.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unzipped, _ := io.ReadAll(reader)
+	if !strings.Contains(string(unzipped), `"maxNodes":3`) {
+		t.Errorf("gzipped: %s", unzipped)
+	}
+}
+
+// TestAskUnknown checks that a request for a Service the agent does not
+// expose is not found, whatever the cluster has by that name.
+func TestAskUnknown(t *testing.T) {
+	handler, _ := testSite(t)
+	if response := get(handler, "/apps/kubernetes/", nil); response.Code != http.StatusNotFound {
+		t.Errorf("%d", response.Code)
+	}
+}
+
+// TestAskers checks that a visitor may ask a few times at once and is
+// then refused, and that another visitor is not refused with them.
+func TestAskers(t *testing.T) {
+	var limits askers
+	for request := 0; request < asksAtOnce; request++ {
+		if !limits.allow("203.0.113.7") {
+			t.Fatalf("request %d was refused", request)
+		}
+	}
+	if limits.allow("203.0.113.7") {
+		t.Error("a request past the allowance was let through")
+	}
+	if !limits.allow("203.0.113.8") {
+		t.Error("another visitor was refused")
 	}
 }
 
