@@ -65,12 +65,14 @@ ZONE=${ZONE:-America/Los_Angeles}
 # The demo: the counter, whose web server every tab runs, and the
 # painter of the picture those web servers render (examples/). The
 # site's visitors may ask the counter for its count and nothing else,
-# and the painter for anything it answers. DEMO=no leaves the cluster
-# empty.
+# and the painter for anything it answers. The same web servers are
+# exposed a second time for their tally, which a node's own page asks
+# its own pod for, so that a tally is not counted as a visitor's
+# request. DEMO=no leaves the cluster empty.
 DEMO=${DEMO:-yes}
 EXPOSE=
 if [ "$DEMO" = yes ]; then
-  EXPOSE=counter=default/web:8000/json,picture=default/picture:8000
+  EXPOSE=counter=default/web:8000/json,tally=default/web:8000/tally,picture=default/picture:8000
 fi
 
 # The pod network: one bridge for every pod, the cluster's own and the

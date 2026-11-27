@@ -59,12 +59,14 @@ const REJOIN_DELAY_MS = 500;
 const RETRY_FIRST_MS = 2000;
 const RETRY_MOST_MS = 30000;
 
-// The exposed Service this page asks its own pod through
-// (examples/counter.yaml), and what the page asks of the pod: an answer
-// to a visit, and how many visits the pod has answered.
-const APP = "counter";
-const ASK_PATH = "json";
-const TALLY_PATH = "tally";
+// What this page asks of its own pod, each as the name an exposed
+// Service goes by and a path there (deploy/setup.sh,
+// examples/counter.yaml): an answer to a visit, and how many visits
+// the pod has answered and tiles it has rendered. The tally has a name
+// of its own so that the agent does not count it among the requests
+// visitors send.
+const ASK = Object.freeze({ app: "counter", path: "json" });
+const TALLY = Object.freeze({ app: "tally", path: "tally" });
 
 // How often the page asks its pod for the tally: often until the pod
 // first answers, which is when its program has started, and seldom
@@ -105,6 +107,7 @@ const watchElement = document.getElementById("watch");
 const mineElement = document.getElementById("mine");
 const ageElement = document.getElementById("tally-age");
 const answeredElement = document.getElementById("tally-answered");
+const tilesElement = document.getElementById("tally-tiles");
 const askButton = document.getElementById("ask-mine");
 const askAnswer = document.getElementById("ask-mine-answer");
 
@@ -500,12 +503,12 @@ function clear() {
 
 // The address of something asked of this node's own pod, through the
 // exposed Service the pod is behind.
-function ofMyPod(path) {
-  return `nodes/${encodeURIComponent(nodeName)}/apps/${APP}/${path}`;
+function ofMyPod(what) {
+  return `nodes/${encodeURIComponent(nodeName)}/apps/${what.app}/${what.path}`;
 }
 
-// Ask this node's pod how many requests the pod has answered, and ask
-// again later. The first answer is what shows the tally and the button:
+// Ask this node's pod how many requests the pod has answered and how
+// many tiles it has rendered, and ask again later. The first answer is what shows the tally and the button:
 // a cluster without the demo has no such pod, and the page then shows
 // neither.
 function askTally(after) {
@@ -514,10 +517,11 @@ function askTally(after) {
     let next = mineElement.hidden ? TALLY_FIRST_MS : TALLY_EVERY_MS;
     if (document.visibilityState === "visible" && frames.size > 0) {
       try {
-        const response = await fetch(ofMyPod(TALLY_PATH), { cache: "no-store" });
+        const response = await fetch(ofMyPod(TALLY), { cache: "no-store" });
         if (response.ok) {
           const tally = await response.json();
           answeredElement.textContent = String(tally.answered ?? 0);
+          tilesElement.textContent = String(tally.tiles ?? 0);
           mineElement.hidden = false;
           next = TALLY_EVERY_MS;
         }
@@ -546,7 +550,7 @@ async function askMine() {
   askButton.disabled = true;
   askAnswer.textContent = "asking";
   try {
-    const response = await fetch(ofMyPod(ASK_PATH), { cache: "no-store" });
+    const response = await fetch(ofMyPod(ASK), { cache: "no-store" });
     if (!response.ok) {
       throw new Error((await response.text()).trim() || String(response.status));
     }

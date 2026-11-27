@@ -191,6 +191,15 @@ spec:
                 exit
               fi
 
+              # What this pod has done since it started, which is no
+              # visit either: how many visits it answered and how many
+              # tiles it rendered. Each was counted as one byte in a
+              # file, so the count is the file's length.
+              if [ "$path" = /tally ]; then
+                reply "200 OK" application/json "{\"answered\": $(wc -c < /tmp/answered), \"tiles\": $(wc -c < /tmp/tiles)}"
+                exit
+              fi
+
               # A tile of a picture, which is no visit either. The path
               # is /tile/<picture>/<tiles to a side>/<tile>, and each
               # of the three is a number.
@@ -214,6 +223,7 @@ spec:
                 if [ $# -eq 5 ] && number "$picture" && number "$side" && number "$tile" &&
                   pixels=$(awk -v picture="$picture" -v side="$side" -v tile="$tile" -f /tile.awk); then
                   reply "200 OK" application/json "{\"node\": \"$NODE_NAME\", \"pixels\": \"$pixels\"}"
+                  printf . >> /tmp/tiles
                   echo "tile $((tile + 1)) of $((side * side)) in picture $picture was rendered here, on $NODE_NAME" >&2
                 else
                   reply "404 Not Found" text/plain "no such tile"
@@ -233,6 +243,7 @@ spec:
                 reply "200 OK" text/plain "visit $visit, answered by a pod on $NODE_NAME
               "
               fi
+              printf . >> /tmp/answered
               echo "visit $visit was answered here, on $NODE_NAME" >&2
               ANSWER
               chmod +x /answer
@@ -299,6 +310,11 @@ spec:
                 print pixels
               }
               TILE
+
+              # The files the pod's tally is counted in, empty to
+              # begin with.
+              : > /tmp/answered
+              : > /tmp/tiles
 
               echo "Linux $(uname -r) on $(uname -m), booted in the tab that is node $NODE_NAME."
               echo "This pod is a web server behind the cluster's Service \"web\"."
