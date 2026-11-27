@@ -39,12 +39,14 @@ fi
 MAX_NODES=${MAX_NODES:-1000}
 MAX_NODES_PER_ADDRESS=${MAX_NODES_PER_ADDRESS:-4}
 
-# How many residents the machine keeps: headless browsers of its own
-# with the join page open, so that a lone visitor finds a cluster with
-# nodes in it. None unless asked for. Each takes about 250 MB.
-RESIDENTS=${RESIDENTS:-0}
+# How many seeds the machine keeps: headless browsers of its own with
+# the join page open, so that a lone visitor finds a cluster with nodes
+# in it. None unless asked for. Each takes about 250 MB, and they join
+# from this machine's one address, so MAX_NODES_PER_ADDRESS is the most
+# there can be.
+SEEDS=${SEEDS:-0}
 
-# The browser a resident is: Chrome's headless shell, at a version that
+# The browser a seed is: Chrome's headless shell, at a version that
 # is known to boot the guest.
 CHROME_VERSION=158.0.8127.88
 CHROME_ROOT=/opt/chrome-headless-shell
@@ -110,14 +112,6 @@ if [ "$DEMO" = yes ]; then
   k3s kubectl apply -f "$BUNDLE/examples/counter.yaml"
 fi
 
-# The residents' word: made once, and kept, so that residents that are
-# already running still say the right one after a new bundle.
-WORD_FILE=/etc/tabernetes/resident-word
-if [ ! -s "$WORD_FILE" ]; then
-  (umask 077 && od -An -N16 -tx1 /dev/urandom | tr -d ' \n' > "$WORD_FILE")
-fi
-RESIDENT_WORD=$(cat "$WORD_FILE")
-
 # Where addresses are, for the site's map: DB-IP's free database of
 # cities, which is published each month. The agent reads it on this
 # machine, so no visitor's address goes anywhere to be looked up. A
@@ -139,24 +133,22 @@ mkdir -p /etc/tabernetes
 cat > "$SETTINGS" <<KEPT
 MAX_NODES=$MAX_NODES
 MAX_NODES_PER_ADDRESS=$MAX_NODES_PER_ADDRESS
-RESIDENTS=$RESIDENTS
+SEEDS=$SEEDS
 ZONE=$ZONE
 DEMO=$DEMO
 KEPT
 
-# The agent. Its settings hold the residents' word, so they are root's
-# to read.
-(umask 077 && cat > /etc/tabernetes/env <<ENV
+# The agent.
+(cat > /etc/tabernetes/env <<ENV
 PUBLIC_URL=$PUBLIC_URL
 MAX_NODES=$MAX_NODES
 MAX_NODES_PER_ADDRESS=$MAX_NODES_PER_ADDRESS
 ZONE=$ZONE
 EXPOSE=$EXPOSE
-RESIDENT_WORD=$RESIDENT_WORD
 UNKERNEL_MIRROR=$UNKERNEL_MIRROR
 ENV
 )
-chmod 600 /etc/tabernetes/env
+chmod 644 /etc/tabernetes/env
 cp "$BUNDLE/deploy/tabernetes.service" /etc/systemd/system/tabernetes.service
 systemctl daemon-reload
 systemctl enable tabernetes.service >/dev/null 2>&1
@@ -164,11 +156,17 @@ systemctl restart tabernetes.service
 sleep 2
 systemctl --no-pager --lines=5 status tabernetes.service
 
-# The residents: the browser, if the machine has none of this version,
-# then as many units as were asked for, and no more.
-cp "$BUNDLE/deploy/tabernetes-resident@.service" /etc/systemd/system/
+# The seeds: the browser, if the machine has none of this version, then
+# as many units as were asked for, and no more. What was set up under
+# the seeds' earlier name goes.
+for unit in $(systemctl list-units --plain --no-legend --all 'tabernetes-resident@*' | awk '{print $1}'); do
+  systemctl disable --now "$unit" >/dev/null 2>&1 || true
+done
+rm -f /etc/systemd/system/tabernetes-resident@.service /etc/tabernetes/resident-word
+systemctl reset-failed 'tabernetes-resident@*' >/dev/null 2>&1 || true
+cp "$BUNDLE/deploy/tabernetes-seed@.service" /etc/systemd/system/
 systemctl daemon-reload
-if [ "$RESIDENTS" -gt 0 ] && [ ! -x "$CHROME_ROOT/$CHROME_VERSION/chrome-headless-shell" ]; then
+if [ "$SEEDS" -gt 0 ] && [ ! -x "$CHROME_ROOT/$CHROME_VERSION/chrome-headless-shell" ]; then
   unpack=$(mktemp -d)
   curl -sfL "$CHROME_URL" -o "$unpack/chrome.zip"
   unzip -q "$unpack/chrome.zip" -d "$unpack"
@@ -176,23 +174,23 @@ if [ "$RESIDENTS" -gt 0 ] && [ ! -x "$CHROME_ROOT/$CHROME_VERSION/chrome-headles
   cp -r "$unpack/chrome-headless-shell-linux64/." "$CHROME_ROOT/$CHROME_VERSION/"
   rm -r "$unpack"
 fi
-if [ "$RESIDENTS" -gt 0 ]; then
+if [ "$SEEDS" -gt 0 ]; then
   ln -sfn "$CHROME_ROOT/$CHROME_VERSION" "$CHROME_ROOT/current"
   if ldd "$CHROME_ROOT/current/chrome-headless-shell" | grep "not found"; then
-    echo "the browser needs the libraries above; no residents were started" >&2
-    RESIDENTS=0
+    echo "the browser needs the libraries above; no seeds were started" >&2
+    SEEDS=0
   fi
 fi
-for unit in $(systemctl list-units --plain --no-legend --all 'tabernetes-resident@*' | awk '{print $1}'); do
-  number=${unit#tabernetes-resident@}
+for unit in $(systemctl list-units --plain --no-legend --all 'tabernetes-seed@*' | awk '{print $1}'); do
+  number=${unit#tabernetes-seed@}
   number=${number%.service}
-  if [ "$number" -gt "$RESIDENTS" ]; then
+  if [ "$number" -gt "$SEEDS" ]; then
     systemctl disable --now "$unit" >/dev/null 2>&1
   fi
 done
 number=1
-while [ "$number" -le "$RESIDENTS" ]; do
-  systemctl enable "tabernetes-resident@$number.service" >/dev/null 2>&1
-  systemctl restart "tabernetes-resident@$number.service"
+while [ "$number" -le "$SEEDS" ]; do
+  systemctl enable "tabernetes-seed@$number.service" >/dev/null 2>&1
+  systemctl restart "tabernetes-seed@$number.service"
   number=$((number + 1))
 done

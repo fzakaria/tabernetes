@@ -138,7 +138,7 @@ and open the address.
 | ----------------------- | ---------------------------------------------------- |
 | `MAX_NODES`             | the most tabs that may be nodes at once, 1000        |
 | `MAX_NODES_PER_ADDRESS` | how many of them from one address, 4                 |
-| `RESIDENTS`             | headless browsers the machine keeps as nodes, 0      |
+| `SEEDS`                 | headless browsers the machine keeps as nodes, 0      |
 | `UNKERNEL_MIRROR`       | where tabs fetch the kernel, jsDelivr; empty for own |
 | `ZONE`                  | the time zone the machine is in, for the globe       |
 | `DEMO`                  | `no` leaves the examples out                         |

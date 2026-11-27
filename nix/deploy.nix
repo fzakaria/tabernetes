@@ -1,7 +1,7 @@
 # `nix run .#deploy -- <ssh host> <public address>`: copy the bundle to
 # a machine and run the machine's own setup with it.
 #
-# MAX_NODES, MAX_NODES_PER_ADDRESS, RESIDENTS, ZONE and DEMO in the
+# MAX_NODES, MAX_NODES_PER_ADDRESS, SEEDS, ZONE and DEMO in the
 # environment are passed on to deploy/setup.sh, which says what each
 # is. A setting that is not named stays as the machine last had it.
 { pkgs, bundle }:
@@ -28,7 +28,7 @@ pkgs.writeShellApplication {
     # Only the settings this run names are passed on: the machine keeps
     # the rest as they were last set (deploy/setup.sh).
     settings=()
-    for name in MAX_NODES MAX_NODES_PER_ADDRESS RESIDENTS ZONE DEMO; do
+    for name in MAX_NODES MAX_NODES_PER_ADDRESS SEEDS ZONE DEMO; do
       if [ -n "''${!name-}" ]; then
         settings+=("$name=''${!name}")
       fi

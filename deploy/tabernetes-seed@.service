@@ -1,0 +1,35 @@
+# A seed: a headless browser on the cluster's own machine with the join
+# page open, so that the cluster has nodes when nobody is visiting.
+# setup.sh starts as many as SEEDS says. To the agent a seed is a
+# visitor like any other: it joins from the machine's own address, and
+# is counted against that address's limit.
+[Unit]
+Description=tabernetes seed %i, a headless browser that is a node
+After=tabernetes.service
+Wants=tabernetes.service
+
+[Service]
+# A user of the unit's own, with a directory for the browser's profile
+# and nothing else of the machine to write to.
+DynamicUser=yes
+StateDirectory=tabernetes-seed-%i
+Environment=HOME=%S/tabernetes-seed-%i
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+# seed.sh starts the browser in the time zone that is this seed's. The
+# machine's own address is one the agent's database of cities does not
+# know, so the site's map places a seed by the time zone its browser
+# reports.
+ExecStart=/opt/tabernetes/deploy/seed.sh %i
+Restart=always
+RestartSec=10
+# A seed is the least important thing on the machine: visitors' pods
+# and the control plane come first.
+MemoryMax=700M
+CPUWeight=20
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
