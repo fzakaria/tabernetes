@@ -1,6 +1,7 @@
-/* One sheet for both pages: the site, and the page a tab joins from. */
+/* One sheet for both pages: the front page, which shows the cluster,
+   and the page a tab joins from. */
 :root {
-  --ground: #f7f7f5;
+  --ground: #f6f6f3;
   --panel: #ffffff;
   --ink: #1c1d21;
   --muted: #666a73;
@@ -8,16 +9,24 @@
   --accent: #3b6fd4;
   --good: #1f8a4c;
   --bad: #b3382c;
+  --bar: #7ea6f4;
+
+  /* The hero is the night sky whatever the page's theme. */
+  --space: #070b16;
+  --space-ink: #edf1ff;
+  --space-muted: #9aa6c8;
+  --space-line: #1d2742;
+
   color-scheme: light dark;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --ground: #15161a;
-    --panel: #1d1f24;
+    --ground: #101116;
+    --panel: #181a20;
     --ink: #ececec;
     --muted: #9a9ea8;
-    --line: #2e3138;
+    --line: #2b2e36;
     --accent: #7ea6f4;
     --good: #55c98a;
     --bad: #f08a7e;
@@ -28,15 +37,27 @@
   box-sizing: border-box;
 }
 
+/* An element the page has hidden stays hidden, whatever a class says
+   about how the element is laid out. */
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   margin: 0;
   background: var(--ground);
   color: var(--ink);
-  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font:
+    16px/1.5 system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
 }
 
 code,
+pre,
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
@@ -46,17 +67,24 @@ a {
 }
 
 main {
-  max-width: 880px;
+  max-width: 1120px;
   margin: 0 auto;
-  padding: 24px 16px 64px;
+  padding: 20px 16px 72px;
 }
 
 header.brand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: space-between;
   font-weight: 600;
   font-size: 18px;
+  margin-bottom: 16px;
+}
+
+header.brand .name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 header.brand img {
@@ -64,47 +92,39 @@ header.brand img {
   height: 28px;
 }
 
+header.brand a {
+  font-weight: 500;
+  font-size: 14px;
+}
+
 h1 {
-  font-size: 30px;
-  line-height: 1.2;
-  margin: 28px 0 8px;
+  font-size: clamp(28px, 4.2vw, 42px);
+  line-height: 1.12;
+  letter-spacing: -0.01em;
+  margin: 0 0 14px;
 }
 
 h2 {
-  font-size: 18px;
-  margin: 36px 0 8px;
+  font-size: 17px;
+  margin: 0 0 6px;
 }
 
-p.lede {
+main > h2 {
+  margin: 36px 0 10px;
+}
+
+.small {
   color: var(--muted);
-  margin: 0 0 24px;
-  max-width: 60ch;
+  font-size: 13px;
+  margin: 0 0 12px;
 }
 
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 16px;
-}
-
-/* The site: the invitation, the counts, the nodes. */
-.invite {
-  display: flex;
-  gap: 20px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.invite img {
-  width: 168px;
-  height: 168px;
-  border-radius: 6px;
-  background: #fff;
-}
-
-.invite .words {
-  flex: 1 1 240px;
+  border-radius: 12px;
+  padding: 18px;
+  min-width: 0;
 }
 
 .button {
@@ -120,6 +140,11 @@ p.lede {
   cursor: pointer;
 }
 
+.button:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
 .button.quiet {
   background: transparent;
   color: var(--muted);
@@ -127,40 +152,405 @@ p.lede {
   font-weight: 500;
 }
 
-.counts {
+.empty {
+  color: var(--muted);
+  margin: 10px 0 0;
+  font-size: 14px;
+}
+
+/* The hero: the invitation, beside the world. */
+.hero {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  gap: 8px 24px;
+  align-items: center;
+  background: radial-gradient(1200px 500px at 85% 40%, #101a36 0%, transparent 60%), var(--space);
+  color: var(--space-ink);
+  border-radius: 16px;
+  padding: 32px;
+}
+
+.hero .lede {
+  color: var(--space-muted);
+  font-size: 17px;
+  margin: 0 0 22px;
+  max-width: 52ch;
+}
+
+.hero .small {
+  color: var(--space-muted);
+}
+
+.hero .invite {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  border: 1px solid var(--space-line);
+  border-radius: 12px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.hero .invite img {
+  width: 132px;
+  height: 132px;
+  border-radius: 6px;
+  background: #fff;
+  flex: none;
+}
+
+.hero .invite p {
+  margin: 0 0 10px;
+}
+
+.hero .invite p:last-child {
+  margin: 0;
+}
+
+.hero .button {
+  background: #7ea6f4;
+  color: #071022;
+}
+
+.world {
+  text-align: center;
+  min-width: 0;
+}
+
+.world canvas {
+  width: 100%;
+  max-width: 520px;
+  aspect-ratio: 1;
+  touch-action: none;
+  cursor: grab;
+}
+
+.world canvas:active {
+  cursor: grabbing;
+}
+
+.world .small {
+  margin: -8px 0 0;
+}
+
+/* The numbers. */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
   margin: 16px 0;
 }
 
-.counts .panel {
-  padding: 12px 16px;
+.tile {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+  min-width: 0;
 }
 
-.counts .number {
-  font-size: 28px;
+.tile .number {
+  font-size: 30px;
   font-weight: 650;
   line-height: 1.1;
+  font-variant-numeric: tabular-nums;
 }
 
-.counts .label {
-  color: var(--muted);
+.tile .label {
   font-size: 13px;
+  margin-top: 2px;
+}
+
+.tile .sub {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 4px;
+  min-height: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Panels side by side. */
+.pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+  align-items: start;
+}
+
+.pair.wide-left {
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+}
+
+.stack {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+/* The topology. */
+#topology {
+  width: 100%;
+  height: auto;
+  display: block;
+  color: var(--muted);
+  overflow: visible;
+}
+
+#topology .spokes line {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+#topology .links line {
+  stroke-width: 1.4;
+  opacity: 0.55;
+}
+
+#topology .links line.trunk {
+  stroke-width: 2.2;
+  opacity: 0.8;
+}
+
+#topology .pulses circle {
+  fill: var(--accent);
+}
+
+#topology .nodes rect {
+  stroke-width: 1.6;
+}
+
+#topology .nodes rect.idle {
+  stroke: var(--muted);
+  opacity: 0.7;
+}
+
+#topology .nodes .flash rect {
+  animation: flash 1.2s ease-out 1;
+}
+
+@keyframes flash {
+  0% {
+    stroke: #ffd27a;
+    stroke-width: 7;
+  }
+  100% {
+    stroke-width: 1.6;
+  }
+}
+
+#topology .service text,
+#topology .labels text {
+  font-size: 11px;
+  fill: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+#topology .labels text {
+  fill: var(--muted);
+  font-size: 11.5px;
+}
+
+#topology .hub circle {
+  fill: var(--panel);
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+#topology .hub text {
+  font-size: 10.5px;
+  fill: var(--ink);
+  font-weight: 600;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  font-size: 13px;
+  margin-top: 8px;
+}
+
+.legend .key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend .swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  display: inline-block;
+}
+
+.legend .swatch.idle {
+  border: 1.5px solid var(--muted);
+}
+
+/* Lists of things that happened, and of records. */
+.feed,
+.ranks {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  font-size: 13.5px;
+}
+
+.feed li,
+.ranks li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  border-top: 1px solid var(--line);
+}
+
+.feed li:first-child,
+.ranks li:first-child {
+  border-top: 0;
+}
+
+.feed .what,
+.ranks .what {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.feed .when,
+.ranks .when {
+  color: var(--muted);
+  white-space: nowrap;
+  text-align: right;
+}
+
+.ranks .when {
+  white-space: normal;
+}
+
+.feed .event::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 8px;
+  background: var(--muted);
+  flex: none;
+  align-self: center;
+}
+
+.feed .event.join::before {
+  background: var(--accent);
+}
+
+.feed .event.start::before {
+  background: var(--good);
+}
+
+.feed .event.leave::before,
+.feed .event.move::before {
+  background: var(--bad);
+}
+
+.feed .event .what {
+  flex: 1;
+}
+
+/* Bars lying down. */
+.bars .bar-row {
+  display: grid;
+  grid-template-columns: minmax(80px, 30%) 1fr 36px;
+  gap: 10px;
+  align-items: center;
+  font-size: 13.5px;
+  padding: 4px 0;
+}
+
+.bar-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bar-track {
+  background: var(--ground);
+  border-radius: 4px;
+  height: 12px;
+  overflow: hidden;
+}
+
+.bar-track .bar {
+  display: block;
+  height: 100%;
+  background: var(--bar);
+  border-radius: 4px;
+}
+
+.bar-value {
+  text-align: right;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Bars standing up. */
+.bars.upright {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 6px;
+  height: 150px;
+  align-items: end;
+  margin: 12px 0 4px;
+}
+
+.bars.upright .column {
+  display: grid;
+  grid-template-rows: 16px 1fr 18px;
+  height: 100%;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.bars.upright .bar {
+  align-self: end;
+  background: var(--bar);
+  border-radius: 4px 4px 0 0;
+  min-height: 2px;
+}
+
+.bars.upright .column-name {
+  padding-top: 4px;
+}
+
+/* The table of nodes. */
+.scroll {
+  overflow-x: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 4px 16px;
 }
 
 table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 14px;
+  font-size: 13.5px;
 }
 
 th,
 td {
   text-align: left;
-  padding: 6px 10px 6px 0;
+  padding: 7px 12px 7px 0;
   border-bottom: 1px solid var(--line);
   white-space: nowrap;
+}
+
+tr:last-child td {
+  border-bottom: 0;
 }
 
 th {
@@ -171,13 +561,8 @@ th {
   letter-spacing: 0.04em;
 }
 
-.scroll {
-  overflow-x: auto;
-}
-
-.empty {
-  color: var(--muted);
-  padding: 12px 0 4px;
+.prose {
+  max-width: 70ch;
 }
 
 pre {
@@ -187,6 +572,47 @@ pre {
   padding: 12px;
   overflow-x: auto;
   font-size: 13px;
+}
+
+/* Narrow screens: one column. */
+@media (max-width: 860px) {
+  .hero {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 22px 18px;
+  }
+
+  .world canvas {
+    max-width: 340px;
+  }
+
+  /* Someone reading on a phone is holding the thing the QR code is
+     for, so the code goes and the button takes its place. */
+  .hero .invite img {
+    display: none;
+  }
+
+  .hero .invite .button {
+    display: block;
+    text-align: center;
+  }
+
+  .hero .invite > div {
+    width: 100%;
+  }
+
+  .tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pair,
+  .pair.wide-left {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .hero .invite {
+    flex-direction: column;
+    align-items: flex-start;
+  }
 }
 
 /* The join page: a tab that is a node. */

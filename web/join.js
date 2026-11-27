@@ -88,6 +88,9 @@ async function describe() {
     browserVersion: "",
     threads: navigator.hardwareConcurrency ?? 0,
     touch: matchMedia("(pointer: coarse)").matches,
+    // The time zone, which is how the site's map places the node: at
+    // the zone's city, and no nearer.
+    zone: Intl.DateTimeFormat().resolvedOptions().timeZone ?? "",
   };
   const agent = navigator.userAgent;
 

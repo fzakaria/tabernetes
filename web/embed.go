@@ -6,5 +6,5 @@ import "embed"
 
 // Files are the site's pages, styles and scripts.
 //
-//go:embed *.html *.css *.js *.svg
+//go:embed *.html *.css *.js *.svg *.json
 var Files embed.FS

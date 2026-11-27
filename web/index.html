@@ -13,43 +13,136 @@
   </head>
   <body>
     <main>
-      <header class="brand"><img src="mark.svg" alt="" /> tabernetes</header>
+      <header class="brand">
+        <span class="name"><img src="mark.svg" alt="" /> tabernetes</span>
+        <a href="https://github.com/fzakaria/tabernetes">source</a>
+      </header>
 
-      <h1>A Kubernetes cluster whose nodes are browser tabs</h1>
-      <p class="lede">
-        Open the page and your phone is a node. The scheduler sends it a pod, and the pod's program
-        runs on a Linux kernel booted in the tab. Close the tab and the node is gone, and Kubernetes
-        starts the pod on someone else's.
-      </p>
-
-      <section class="panel invite">
-        <img src="qr.png" alt="A QR code for the page that makes a browser a node" />
-        <div class="words">
-          <p><b>Scan to become a node</b>, or use the browser you are reading this in.</p>
-          <p><a class="button" href="join">Join the cluster</a></p>
-          <p style="color: var(--muted); font-size: 13px">
-            Joining downloads about 5 MB and runs a small Linux guest in the tab, on one core, until
-            you close the tab.
+      <!-- The invitation, beside the world. -->
+      <section class="hero">
+        <div class="pitch">
+          <h1>A Kubernetes cluster whose nodes are browser tabs</h1>
+          <p class="lede">
+            Open the page and your phone is a node. The scheduler sends it a pod, and the pod's
+            program runs on a Linux kernel booted in the tab. Close the tab and the node is gone,
+            and Kubernetes starts the pod on someone else's.
+          </p>
+          <div class="invite">
+            <img src="qr.png" alt="A QR code for the page that makes a browser a node" />
+            <div>
+              <p><b>Scan to become a node</b>, or use the browser you are reading this in.</p>
+              <p><a class="button" href="join">Join the cluster</a></p>
+              <p class="small">
+                Joining downloads about 5 MB and runs a small Linux guest in the tab, on one core,
+                until you close the tab.
+              </p>
+            </div>
+          </div>
+        </div>
+        <div class="world">
+          <canvas
+            id="globe"
+            aria-label="A globe with a dot for each node, where its time zone's city is"
+          ></canvas>
+          <p class="small" id="globe-note">
+            Each dot is a node, placed by its browser's time zone. Drag to turn.
           </p>
         </div>
       </section>
 
-      <section class="counts">
-        <div class="panel">
-          <div class="number" id="count-nodes">0</div>
+      <!-- The numbers. -->
+      <section class="tiles" id="tiles">
+        <div class="tile">
+          <div class="number" id="tile-nodes">0</div>
           <div class="label">nodes now</div>
+          <div class="sub" id="tile-nodes-sub"></div>
+        </div>
+        <div class="tile">
+          <div class="number" id="tile-pods">0</div>
+          <div class="label">pods running in tabs</div>
+          <div class="sub" id="tile-pods-sub"></div>
+        </div>
+        <div class="tile">
+          <div class="number" id="tile-countries">0</div>
+          <div class="label">countries</div>
+          <div class="sub" id="tile-countries-sub"></div>
+        </div>
+        <div class="tile">
+          <div class="number" id="tile-boot">-</div>
+          <div class="label">median boot</div>
+          <div class="sub" id="tile-boot-sub"></div>
+        </div>
+        <div class="tile">
+          <div class="number" id="tile-age">-</div>
+          <div class="label">cluster age</div>
+          <div class="sub" id="tile-age-sub"></div>
+        </div>
+        <div class="tile">
+          <div class="number" id="tile-lent">0</div>
+          <div class="label">hours of tabs lent</div>
+          <div class="sub" id="tile-lent-sub"></div>
+        </div>
+        <div class="tile">
+          <div class="number" id="tile-moved">0</div>
+          <div class="label">pods moved off a closed tab</div>
+          <div class="sub" id="tile-moved-sub"></div>
+        </div>
+        <div class="tile">
+          <div class="number" id="tile-carried">0</div>
+          <div class="label">carried between tabs and the machine</div>
+          <div class="sub" id="tile-carried-sub"></div>
+        </div>
+      </section>
+
+      <!-- Who is connected to what, and what just happened. -->
+      <section class="pair wide-left">
+        <div class="panel">
+          <h2>Topology</h2>
+          <p class="small">
+            The control plane in the middle, a node for each tab, and each Service on the way to the
+            pods behind it. A node is filled when its pod is running.
+          </p>
+          <svg
+            id="topology"
+            role="img"
+            aria-label="The cluster's nodes around its control plane"
+          ></svg>
+          <div class="legend" id="legend"></div>
+        </div>
+        <div class="stack">
+          <div class="panel" id="ask-panel" hidden>
+            <h2>Ask the cluster</h2>
+            <p class="small">
+              Send a request to a Service. One of the pods behind it answers, on whoever's phone
+              that is, and counts the visit in a Redis on someone else's.
+            </p>
+            <p><button class="button" id="ask">Send a request</button></p>
+            <ul class="feed" id="answers"></ul>
+          </div>
+          <div class="panel">
+            <h2>Happening now</h2>
+            <ul class="feed" id="events"></ul>
+            <p class="empty" id="events-empty">Nothing yet. A tab that joins shows up here.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- How long a tab takes, and what the tabs are. -->
+      <section class="pair">
+        <div class="panel">
+          <h2>Boot time</h2>
+          <p class="small">
+            From a tab being told of its pod to the pod's program running: the page loaded, the
+            kernel booted, the image mounted. The last <span id="boots-count">0</span> starts.
+          </p>
+          <div class="bars upright" id="boots"></div>
+          <ul class="ranks" id="boots-by-device"></ul>
         </div>
         <div class="panel">
-          <div class="number" id="count-pods">0</div>
-          <div class="label">pods on them</div>
-        </div>
-        <div class="panel">
-          <div class="number" id="count-peak">0</div>
-          <div class="label">most nodes at once</div>
-        </div>
-        <div class="panel">
-          <div class="number" id="count-room">0</div>
-          <div class="label">places left</div>
+          <h2>The fleet</h2>
+          <p class="small">What the nodes are, by what their browsers say.</p>
+          <div class="bars" id="fleet"></div>
+          <ul class="ranks" id="records"></ul>
         </div>
       </section>
 
@@ -61,29 +154,33 @@
               <th>Node</th>
               <th>Device</th>
               <th>Browser</th>
+              <th>Near</th>
               <th>Pod</th>
+              <th>Boot</th>
+              <th>Carried</th>
               <th>Age</th>
             </tr>
           </thead>
           <tbody id="nodes"></tbody>
         </table>
       </div>
-      <p class="empty" id="empty">No tab is a node right now. Yours can be the first.</p>
+      <p class="empty" id="nodes-empty">No tab is a node right now. Yours can be the first.</p>
 
       <h2>How it works</h2>
-      <p>
-        The control plane is an ordinary Kubernetes on one small machine. Beside it runs an agent
-        that plays kubelet for every tab at once. A tab that opens the join page gets a Node. When
-        the scheduler binds a pod to that Node, the agent starts the pod's container with
-        <a href="https://github.com/fzakaria/tabc">tabc</a>, a container runtime that runs each
-        container in a browser tab, and the tab loads the container's page.
-      </p>
-      <p>
-        The tab supplies the CPU and the memory. The container's files and its network stay on the
-        machine: every connection the program makes leaves from the pod's own address there, so a
-        Service reaches a pod on a phone like any other pod.
-      </p>
-      <pre>
+      <div class="prose">
+        <p>
+          The control plane is an ordinary Kubernetes on one small machine. Beside it runs an agent
+          that plays kubelet for every tab at once. A tab that opens the join page gets a Node. When
+          the scheduler binds a pod to that Node, the agent starts the pod's container with
+          <a href="https://github.com/fzakaria/tabc">tabc</a>, a container runtime that runs each
+          container in a browser tab, and the tab loads the container's page.
+        </p>
+        <p>
+          The tab supplies the CPU and the memory. The container's files and its network stay on the
+          machine: every connection the program makes leaves from the pod's own address there, so a
+          Service reaches a pod on a phone like any other pod.
+        </p>
+        <pre>
 apiVersion: v1
 kind: Pod
 metadata:
@@ -94,10 +191,11 @@ spec:
     - name: hello
       image: alpine
       command: ["sh", "-c", "echo hello from $(uname -m) in a tab; sleep 3600"]</pre>
-      <p>
-        The source is at
-        <a href="https://github.com/fzakaria/tabernetes">github.com/fzakaria/tabernetes</a>.
-      </p>
+        <p class="small">
+          A node's place on the globe is the city its browser's time zone is named after, and
+          nothing finer: the site does not look up anyone's address. The land is Natural Earth's.
+        </p>
+      </div>
     </main>
     <script type="module" src="site.js"></script>
   </body>
