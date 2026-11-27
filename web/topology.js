@@ -66,15 +66,15 @@ const PALETTE = [
 // The platforms whose devices are held in a hand.
 const HANDHELD = new Set(["Android", "iOS"]);
 
-// How long a dot takes from the machine to a node along its spoke.
-const PULSE_SECONDS = 0.9;
+// The dots that move: one from the machine to a node whose pods have
+// carried something, and a larger one for a visitor's own request, from
+// the machine through the Service to the pod that answered. Each has a
+// colour, a size, and how long its way takes.
+const PULSE = { color: "var(--accent)", radius: 2.4, ms: 900 };
+const ASKED = { color: "#ffb020", radius: 4.5, ms: 1400 };
 
-// A visitor's own request, on its way from the machine through the
-// Service to the pod that answered: the dot's colour and size, and how
-// long the way takes.
-const ASKED_COLOR = "#ffb020";
-const ASKED_RADIUS = 4.5;
-const ASKED_SECONDS = 1.2;
+// How long a dot stays where it arrived before it goes.
+const LINGER_MS = 500;
 
 function element(name, attributes, text) {
   const made = document.createElementNS(SVG, name);
@@ -159,13 +159,84 @@ export function createTopology(svg) {
   let carriedBefore = new Map();
   let flashed = null;
 
+  // The dots in flight, and the layer they are drawn in. The layer is
+  // kept from one drawing to the next, so that a dot's way is not cut
+  // short when the cluster is read again, and the dots are moved a
+  // frame at a time from here.
+  const flights = [];
+  const sky = element("g", { class: "flights" });
+  let ticking = false;
+
+  // Where a dot is, a part of the way along the straight pieces between
+  // its points.
+  function along(points, part) {
+    const lengths = [];
+    let whole = 0;
+    for (let index = 1; index < points.length; index++) {
+      const length = Math.hypot(
+        points[index][0] - points[index - 1][0],
+        points[index][1] - points[index - 1][1],
+      );
+      lengths.push(length);
+      whole += length;
+    }
+    let left = Math.min(1, Math.max(0, part)) * whole;
+    for (const [index, length] of lengths.entries()) {
+      if (left <= length || index === lengths.length - 1) {
+        const share = length > 0 ? left / length : 0;
+        return [
+          points[index][0] + (points[index + 1][0] - points[index][0]) * share,
+          points[index][1] + (points[index + 1][1] - points[index][1]) * share,
+        ];
+      }
+      left -= length;
+    }
+    return points.at(-1);
+  }
+
+  // Move every dot to where it is now, and drop the ones that arrived a
+  // while ago.
+  function tick(now) {
+    for (const flight of [...flights]) {
+      const elapsed = now - flight.started;
+      if (elapsed > flight.kind.ms + LINGER_MS) {
+        flight.dot.remove();
+        flights.splice(flights.indexOf(flight), 1);
+        continue;
+      }
+      const [x, y] = along(flight.points, elapsed / flight.kind.ms);
+      flight.dot.setAttribute("cx", x);
+      flight.dot.setAttribute("cy", y);
+    }
+    ticking = flights.length > 0;
+    if (ticking) {
+      requestAnimationFrame(tick);
+    }
+  }
+
+  // Send a dot along some points.
+  function fly(kind, points) {
+    const dot = element("circle", {
+      r: kind.radius,
+      cx: points[0][0],
+      cy: points[0][1],
+    });
+    dot.style.fill = kind.color;
+    sky.append(dot);
+    flights.push({ kind, points, dot, started: performance.now() });
+    if (!ticking) {
+      ticking = true;
+      requestAnimationFrame(tick);
+    }
+  }
+
   return {
     update(view) {
       const palette = colors(view);
+
       const layers = {
         spokes: element("g", { class: "spokes" }),
         links: element("g", { class: "links" }),
-        pulses: element("g", { class: "pulses" }),
         nodes: element("g", { class: "nodes" }),
         services: element("g", { class: "services" }),
         labels: element("g", { class: "labels" }),
@@ -204,16 +275,10 @@ export function createTopology(svg) {
           );
         }
         if (carried > (carriedBefore.get(node.name) ?? carried)) {
-          const pulse = element("circle", { r: 2.4 });
-          pulse.append(
-            element("animateMotion", {
-              dur: `${PULSE_SECONDS}s`,
-              repeatCount: 1,
-              fill: "freeze",
-              path: `M${CENTER},${CENTER} L${x},${y}`,
-            }),
-          );
-          layers.pulses.append(pulse);
+          fly(PULSE, [
+            [CENTER, CENTER],
+            [x, y],
+          ]);
         }
 
         // The node: a phone or a screen, or one square of a crowd,
@@ -327,16 +392,11 @@ export function createTopology(svg) {
         // it: a dot from the machine to the Service and on to the node.
         const answered = places.get(flashed);
         if (answered && targets.includes(answered)) {
-          const dot = element("circle", { r: ASKED_RADIUS, fill: ASKED_COLOR });
-          dot.append(
-            element("animateMotion", {
-              dur: `${ASKED_SECONDS}s`,
-              repeatCount: 1,
-              fill: "freeze",
-              path: `M${CENTER},${CENTER} L${x},${y} L${answered.x},${answered.y}`,
-            }),
-          );
-          layers.pulses.append(dot);
+          fly(ASKED, [
+            [CENTER, CENTER],
+            [x, y],
+            [answered.x, answered.y],
+          ]);
         }
         const labelOffset = index % 2 === 0 ? -13 : 20;
 
@@ -399,11 +459,11 @@ export function createTopology(svg) {
       svg.replaceChildren(
         layers.spokes,
         layers.links,
-        layers.pulses,
         layers.nodes,
         layers.services,
         layers.labels,
         hub,
+        sky,
       );
       flashed = null;
     },
