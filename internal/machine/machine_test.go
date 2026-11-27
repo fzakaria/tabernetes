@@ -33,9 +33,10 @@ func writeProc(t *testing.T, cpuLine string) string {
 }
 
 // TestRead checks that a reading has the machine's memory in bytes and
-// its CPUs' time split into all of it and the idle part, where waiting
-// for a disk counts as idle and a guest's time is not counted twice: by
-// reading a stand-in for /proc.
+// its CPUs' time split into all of it, the idle part and the part
+// spent on work at a lowered priority, where waiting for a disk counts
+// as idle and a guest's time is not counted twice: by reading a
+// stand-in for /proc.
 func TestRead(t *testing.T) {
 	root := writeProc(t, "cpu  100 20 30 800 50 4 6 10 7 3")
 	reading, err := Read(root)
@@ -45,8 +46,8 @@ func TestRead(t *testing.T) {
 	if reading.MemoryTotal != 8<<30 || reading.MemoryAvailable != 6<<30 {
 		t.Errorf("memory %d of %d", reading.MemoryAvailable, reading.MemoryTotal)
 	}
-	if reading.CPUTotal != 1020 || reading.CPUIdle != 850 {
-		t.Errorf("CPU time %d, idle %d", reading.CPUTotal, reading.CPUIdle)
+	if reading.CPUTotal != 1020 || reading.CPUIdle != 850 || reading.CPULowered != 20 {
+		t.Errorf("CPU time %d, idle %d, lowered %d", reading.CPUTotal, reading.CPUIdle, reading.CPULowered)
 	}
 }
 
@@ -61,12 +62,18 @@ func TestReadWithoutFiles(t *testing.T) {
 
 // TestBusySince checks the part of the time between two readings that
 // the CPUs were busy: three quarters when 100 ticks passed and 25 of
-// them were idle, and nothing when no time passed at all.
+// them were idle, a quarter when 50 more of them went to work at a
+// lowered priority, which gives way, and nothing when no time passed
+// at all.
 func TestBusySince(t *testing.T) {
 	earlier := Reading{CPUTotal: 1000, CPUIdle: 900}
 	later := Reading{CPUTotal: 1100, CPUIdle: 925}
 	if got := later.BusySince(earlier); math.Abs(got-0.75) > 1e-9 {
 		t.Errorf("busy %v, want 0.75", got)
+	}
+	yielding := Reading{CPUTotal: 1100, CPUIdle: 925, CPULowered: 50}
+	if got := yielding.BusySince(earlier); math.Abs(got-0.25) > 1e-9 {
+		t.Errorf("busy with half the time on lowered work %v, want 0.25", got)
 	}
 	if got := earlier.BusySince(earlier); got != 0 {
 		t.Errorf("busy over no time %v, want 0", got)

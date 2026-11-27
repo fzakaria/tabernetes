@@ -248,7 +248,10 @@ every two seconds):
   it could still give out (`--reserve-memory`). A node costs it about
   10 MB, so on the demo's 8 GB that is somewhere past 500 nodes.
 - A tab is asked to wait, and asks again by itself, while the machine's
-  CPUs have been more than 90% busy (`--busy-above`).
+  CPUs have been more than 90% busy (`--busy-above`). Work at a lowered
+  priority is not counted, since the kernel takes its time back for
+  anything else. The seeds run that way, so four seeds rendering a
+  picture on both CPUs keep nobody out.
 - `--max-nodes` is a ceiling over both, 1000.
 - Pods take turns at the machine's part of starting, eight at a time
   (`--starts-at-once`): a crowd that joins at once is every one of them

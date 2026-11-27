@@ -31,11 +31,13 @@ const (
 // The line of stat for every CPU together, and where in the line the
 // kinds of time are: the first eight numbers are all the time there
 // was (the two after them, a guest's, are already inside the first
-// two), and the fourth and fifth are the time spent doing nothing and
-// waiting for a disk.
+// two), the fourth and fifth are the time spent doing nothing and
+// waiting for a disk, and the second is the time spent on programs
+// whose priority was lowered.
 const (
 	keyAllCPUs      = "cpu"
 	cpuFieldsUsed   = 8
+	cpuFieldLowered = 1
 	cpuFieldIdle    = 3
 	cpuFieldWaiting = 4
 )
@@ -47,11 +49,13 @@ type Reading struct {
 	MemoryTotal     int64
 	MemoryAvailable int64
 	// CPUTotal is the time the machine's CPUs have had since boot,
-	// added up over the CPUs, and CPUIdle the part of that time they
-	// did nothing in. Both are in the kernel's ticks, and only the
+	// added up over the CPUs, CPUIdle the part of that time they did
+	// nothing in, and CPULowered the part they gave to programs whose
+	// priority was lowered. All are in the kernel's ticks, and only the
 	// difference between two readings means anything.
-	CPUTotal uint64
-	CPUIdle  uint64
+	CPUTotal   uint64
+	CPUIdle    uint64
+	CPULowered uint64
 }
 
 // Read returns a reading of the machine from the files under a
@@ -114,17 +118,25 @@ func Read(root string) (Reading, error) {
 		if index == cpuFieldIdle || index == cpuFieldWaiting {
 			reading.CPUIdle += ticks
 		}
+		if index == cpuFieldLowered {
+			reading.CPULowered += ticks
+		}
 	}
 	return reading, nil
 }
 
 // BusySince returns the part of the time between an earlier reading
-// and this one that the CPUs spent doing something, from 0 to 1.
+// and this one that the CPUs spent on work that does not give way,
+// from 0 to 1. Time given to a program whose priority was lowered is
+// not busy time: the kernel takes it back for whatever else asks. The
+// seeds (deploy/tabernetes-seed@.service) are such programs, and a
+// machine whose seeds are all at work has as much to give a tab that
+// joins as an idle one.
 func (r Reading) BusySince(earlier Reading) float64 {
 	if r.CPUTotal <= earlier.CPUTotal {
 		return 0
 	}
 	total := float64(r.CPUTotal - earlier.CPUTotal)
-	idle := float64(r.CPUIdle - earlier.CPUIdle)
-	return min(1, max(0, 1-idle/total))
+	free := float64(r.CPUIdle-earlier.CPUIdle) + float64(r.CPULowered-earlier.CPULowered)
+	return min(1, max(0, 1-free/total))
 }

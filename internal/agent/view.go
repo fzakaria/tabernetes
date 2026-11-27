@@ -80,8 +80,9 @@ type MachineView struct {
 	Runtime string `json:"runtime"`
 	// MemoryTotal and MemoryAvailable are the machine's memory and how
 	// much of it could still be given out, in bytes, and Busy the part
-	// of their time the machine's CPUs have been busy lately, from 0 to
-	// 1. All are zero for a machine the agent does not read.
+	// of their time the machine's CPUs have been busy lately with work
+	// that does not give way, from 0 to 1. All are zero for a machine
+	// the agent does not read.
 	MemoryTotal     int64   `json:"memoryTotal"`
 	MemoryAvailable int64   `json:"memoryAvailable"`
 	Busy            float64 `json:"busy"`
