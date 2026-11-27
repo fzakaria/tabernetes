@@ -42,14 +42,19 @@ The nodes are whoever has the join page open.
 
 ## Join
 
-Open [tabernetes.exe.xyz](https://tabernetes.exe.xyz), or scan the code
-on it, and press Join. The tab becomes a node, named after the device,
-and shows the pod it was given: a terminal on a Linux that is running
-in the tab. Close the tab to leave.
+Open [tabernet.es](https://tabernet.es), or scan the code on it, and
+press Join. The tab becomes a node, named after the device, and shows
+the pod it was given: a terminal on a Linux that is running in the tab.
+Close the tab to leave.
 
 It needs Chrome 137, Firefox 153 or Safari 27, or newer. Joining
-downloads about 5 MB once and uses one core and about 200 MB of the
-device's memory while the tab is open.
+downloads about 5 MB once, most of it the kernel from jsDelivr, and
+uses one core and about 200 MB of the device's memory while the tab is
+open.
+
+The page also shows the cluster: a globe with a dot for each node that
+can be picked, the Services and the pods behind them, and a button that
+sends a request to a web server on someone's phone.
 
 ## Run a pod in a tab
 
@@ -80,10 +85,10 @@ hello from aarch64 Linux 7.3.4+, in a browser tab
 The guest is aarch64 on every device, so the image needs a
 `linux/arm64` variant. [examples](examples) has two more:
 
-| example           | what it is                                           |
-| ----------------- | ---------------------------------------------------- |
-| `counter.yaml`    | three web servers and the Redis they count visits in |
-| `everywhere.yaml` | a pod for every tab, so every phone has one to show  |
+| example           | what it is                                                    |
+| ----------------- | ------------------------------------------------------------- |
+| `counter.yaml`    | a web server on every tab, and the Redis they count visits in |
+| `everywhere.yaml` | a DaemonSet whose pod on every tab tells the time             |
 
 What a tab's pod can have:
 
@@ -134,16 +139,28 @@ That copies the agent and tabc over, installs k3s if the machine has
 none, and starts the agent on port 8000. Put HTTPS in front of the port
 and open the address.
 
-| variable                | what it sets                                   |
-| ----------------------- | ---------------------------------------------- |
-| `MAX_NODES`             | how many tabs may be nodes at once, 100        |
-| `MAX_NODES_PER_ADDRESS` | how many of them from one address, 4           |
-| `ZONE`                  | the time zone the machine is in, for the globe |
-| `DEMO`                  | `no` leaves the examples out                   |
+| variable                | what it sets                                         |
+| ----------------------- | ---------------------------------------------------- |
+| `MAX_NODES`             | the most tabs that may be nodes at once, 1000        |
+| `MAX_NODES_PER_ADDRESS` | how many of them from one address, 4                 |
+| `RESIDENTS`             | headless browsers the machine keeps as nodes, 0      |
+| `UNKERNEL_MIRROR`       | where tabs fetch the kernel, jsDelivr; empty for own |
+| `ZONE`                  | the time zone the machine is in, for the globe       |
+| `DEMO`                  | `no` leaves the examples out                         |
 
-The cluster's page counts joins, boots and moved pods, and draws each
-node on a globe by the city its browser's time zone is named after. It
-does not look up anyone's address.
+How many nodes the cluster takes is the machine's to say: a node costs
+it about 9 MB, and the agent turns tabs away once less than 1 GB of
+memory is spare, whatever `MAX_NODES` is.
+
+A resident is a headless browser on the machine itself with the join
+page open, so that a lone visitor finds a cluster with nodes in it.
+Residents are named `resident-xxxx`, marked on the page, left out of
+its totals, and give their places up when the cluster is full.
+
+The cluster's page draws each node on a globe, roughly where its
+address is: a city, from DB-IP's free database, which setup.sh fetches
+onto the machine. No address leaves the machine or reaches the page.
+Without the database a node is drawn at its browser's time zone's city.
 
 ## Hacking
 
