@@ -100,27 +100,46 @@ type ledger struct {
 	nextID int64
 }
 
-// newLedger returns a ledger with the totals an earlier agent saved
-// under a directory, or one that starts now.
+// saved is the ledger as its file holds it: the totals, and the latest
+// boots, so that the site's chart of them is not empty after every
+// restart of the agent. The feed is not kept: what happened before a
+// restart is not happening now.
+type saved struct {
+	Totals Totals `json:"totals"`
+	Boots  []Boot `json:"boots"`
+}
+
+// newLedger returns a ledger with the totals and the boots an earlier
+// agent saved under a directory, or one that starts now.
 func newLedger(dir string, now time.Time) *ledger {
 	book := &ledger{totals: Totals{Since: now}}
 	contents, err := os.ReadFile(filepath.Join(dir, ledgerFile))
 	if err != nil {
 		return book
 	}
-	var saved Totals
-	if err := json.Unmarshal(contents, &saved); err != nil || saved.Since.IsZero() {
+	var kept saved
+	if err := json.Unmarshal(contents, &kept); err != nil {
 		return book
 	}
-	book.totals = saved
+	if !kept.Totals.Since.IsZero() {
+		book.totals, book.boots = kept.Totals, kept.Boots
+		return book
+	}
+
+	// A file from before boots were saved is the totals alone.
+	var totals Totals
+	if err := json.Unmarshal(contents, &totals); err != nil || totals.Since.IsZero() {
+		return book
+	}
+	book.totals = totals
 	return book
 }
 
-// save writes the totals under a directory, by way of a second file so
-// that a crash mid-write leaves the old totals whole.
+// save writes the totals and the boots under a directory, by way of a
+// second file so that a crash mid-write leaves the old ones whole.
 func (l *ledger) save(dir string) error {
 	l.mu.Lock()
-	contents, err := json.Marshal(l.totals)
+	contents, err := json.Marshal(saved{Totals: l.totals, Boots: l.boots})
 	l.mu.Unlock()
 	if err != nil {
 		return err

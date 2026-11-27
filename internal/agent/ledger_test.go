@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -55,25 +57,45 @@ func TestLedgerTotals(t *testing.T) {
 	}
 }
 
-// TestLedgerSaves checks that the totals a ledger saved are the totals
-// the next ledger starts with, the day the cluster first started among
-// them, and that the feed starts empty.
+// TestLedgerSaves checks that the totals and the boots a ledger saved
+// are what the next ledger starts with, the day the cluster first
+// started among them, and that the feed starts empty: what happened
+// before a restart is not happening now.
 func TestLedgerSaves(t *testing.T) {
 	dir := t.TempDir()
 	first := time.Unix(1000, 0)
 	book := newLedger(dir, first)
 	book.joined("pixel-1", 1, first)
+	book.started("pixel-1", "default/web", "Android", "Pixel-9", 2500*time.Millisecond, first)
 	if err := book.save(dir); err != nil {
 		t.Fatal(err)
 	}
 
 	later := newLedger(dir, time.Unix(9000, 0))
-	totals, events, _ := later.view()
+	totals, events, boots := later.view()
 	if totals.Joins != 1 || !totals.Since.Equal(first) {
 		t.Errorf("after a restart: joins %d, since %v", totals.Joins, totals.Since)
 	}
+	if len(boots) != 1 || boots[0].Seconds != 2.5 || boots[0].Model != "Pixel-9" {
+		t.Errorf("after a restart the boots are %+v", boots)
+	}
 	if len(events) != 0 {
 		t.Errorf("after a restart the feed has %d events", len(events))
+	}
+}
+
+// TestLedgerReadsTotalsAlone checks that a file written before boots
+// were saved, which is the totals and nothing around them, still gives
+// the next ledger its totals: by writing such a file by hand.
+func TestLedgerReadsTotalsAlone(t *testing.T) {
+	dir := t.TempDir()
+	old := `{"since":"2026-11-26T00:00:00Z","joins":7}`
+	if err := os.WriteFile(filepath.Join(dir, ledgerFile), []byte(old), ledgerFileMode); err != nil {
+		t.Fatal(err)
+	}
+	totals, _, boots := newLedger(dir, time.Unix(9000, 0)).view()
+	if totals.Joins != 7 || totals.Since.Year() != 2026 || len(boots) != 0 {
+		t.Errorf("from a file of totals alone: %+v, %d boots", totals, len(boots))
 	}
 }
 
