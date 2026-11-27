@@ -34,6 +34,13 @@ const State = Object.freeze({
 // asks for one again.
 const REJOIN_DELAY_MS = 500;
 
+// A tab that lost its place without asking to, because the agent
+// restarted or the network dropped, asks again by itself: first after
+// RETRY_FIRST_MS, then after twice as long each time, up to
+// RETRY_MOST_MS.
+const RETRY_FIRST_MS = 2000;
+const RETRY_MOST_MS = 30000;
+
 const nameElement = document.getElementById("name");
 const statusElement = document.getElementById("status");
 const podsElement = document.getElementById("pods");
@@ -47,6 +54,12 @@ let socket = null;
 const frames = new Map();
 let state = State.JOINING;
 let wakeLock = null;
+
+// Whether the person asked to leave, the wait before the next try at
+// joining again, and the timer of that try.
+let leaving = false;
+let retryDelay = RETRY_FIRST_MS;
+let retryTimer = null;
 
 // Show the status line.
 function show(next, text) {
@@ -206,6 +219,8 @@ function clear() {
 
 // Become a node.
 async function join() {
+  clearTimeout(retryTimer);
+  leaving = false;
   if (!supported()) {
     nameElement.textContent = "not a node";
     show(
@@ -228,6 +243,7 @@ async function join() {
     const message = JSON.parse(event.data);
     switch (message.type) {
       case FromAgent.JOINED:
+        retryDelay = RETRY_FIRST_MS;
         nameElement.textContent = message.node;
         document.title = `${message.node} · tabernetes`;
         show(State.IDLE, "Ready. Waiting for the scheduler to send a pod.");
@@ -254,15 +270,27 @@ async function join() {
     }
     socket = null;
     clear();
-    if (state !== State.REFUSED) {
-      nameElement.textContent = "not a node";
-      show(State.LEFT, "This tab left the cluster, and its pods went to other nodes.");
+    if (state === State.REFUSED) {
+      return;
     }
+    nameElement.textContent = "not a node";
+    if (leaving) {
+      show(State.LEFT, "This tab left the cluster, and its pods went to other nodes.");
+      return;
+    }
+
+    // The place was lost, not given up: ask for one again, later each
+    // time the asking fails.
+    show(State.LEFT, "This tab lost its place in the cluster, and is asking for one again.");
+    retryTimer = setTimeout(join, retryDelay);
+    retryDelay = Math.min(retryDelay * 2, RETRY_MOST_MS);
   });
 }
 
-// Stop being a node.
+// Stop being a node, because the person said so or the tab is closing.
 function leave() {
+  leaving = true;
+  clearTimeout(retryTimer);
   if (socket === null) {
     return;
   }
@@ -287,8 +315,9 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") {
     return;
   }
-  if (state === State.LEFT) {
-    setTimeout(join, REJOIN_DELAY_MS);
+  if (state === State.LEFT && !leaving) {
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(join, REJOIN_DELAY_MS);
     return;
   }
   stayAwake();
