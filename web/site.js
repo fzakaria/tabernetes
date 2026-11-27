@@ -31,8 +31,15 @@ const ASK_PATH = `apps/${ASK_NAME}/json`;
 // How many times a request is sent before the page gives up, and the
 // wait between tries. A pod whose tab has just closed fails the
 // request that was sent to it, and the next try goes to another pod.
-const ASK_TRIES = 3;
-const ASK_RETRY_MS = 300;
+// After the agent restarts, every pod is started again and none is
+// ready for some seconds, which the tries are enough to wait out.
+const ASK_TRIES = 8;
+const ASK_RETRY_MS = 1000;
+
+// What the agent says when the Service has no pod ready, and what the
+// page says in its place.
+const NO_POD = "connection refused";
+const NO_POD_TEXT = "no pod is ready to answer yet; the cluster's pods are starting";
 
 // How much of each list is shown.
 const EVENTS_SHOWN = 8;
@@ -57,11 +64,10 @@ const EventKind = Object.freeze({
 
 const byId = (id) => document.getElementById(id);
 
-// What marks a resident beside its name, and what a resident is, for
-// someone who picked one.
-const RESIDENT_TAG = "resident";
-const RESIDENT_NOTE =
-  "A headless browser on the cluster's own machine, there so the cluster is never empty. It gives its place up when the cluster is full.";
+// The browser the cluster's own machine keeps a few of open with the
+// join page, so that the cluster is never without nodes, as the browser
+// names itself.
+const OWN_BROWSER = "HeadlessChrome";
 
 // The parts of a line of YAML: a comment, and a key with what follows
 // its colon.
@@ -79,9 +85,19 @@ let pickedName = null;
 const answers = [];
 
 // The node a visitor came to see: the name after this in the page's
-// address, which a node's own tab puts in its link to this page.
+// address, which a node's own tab puts in its link to this page. The
+// node may not be in the first reading of the cluster, so the page
+// looks for it over this many readings before giving up.
 const NODE_KEY = "node";
-let showFirst = new URLSearchParams(location.hash.slice(1)).get(NODE_KEY);
+const SHOW_TRIES = 5;
+let showFirst = null;
+let showTriesLeft = 0;
+
+// Take the node to show from the page's address.
+function readAddress() {
+  showFirst = new URLSearchParams(location.hash.slice(1)).get(NODE_KEY);
+  showTriesLeft = SHOW_TRIES;
+}
 
 // Make an element with a class and some text.
 function make(tag, className, text) {
@@ -115,12 +131,15 @@ function renderTiles(view) {
   const pods = view.nodes.flatMap((node) => node.pods);
   const running = pods.filter((pod) => pod.running).length;
   const starting = pods.length - running;
-  const residents = view.nodes.filter((node) => node.resident).length;
-  tile(
-    "nodes",
-    view.nodes.length,
-    `room for ${count(view.room)} more` + (residents > 0 ? `, ${residents} the cluster's own` : ""),
-  );
+  tile("nodes", view.nodes.length, `room for ${count(view.room)} more`);
+
+  // How many of the nodes are the cluster's own, for whoever holds the
+  // pointer over the number.
+  const own = view.nodes.filter((node) => node.browser === OWN_BROWSER).length;
+  byId("tile-nodes-sub").title =
+    own > 0
+      ? `${own} of the nodes are headless browsers the cluster keeps open itself, so that it is never empty.`
+      : "";
   tile(
     "pods",
     running,
@@ -152,11 +171,8 @@ function renderTiles(view) {
     `this agent up ${duration(since(view, view.started))}`,
   );
 
-  // The time visitors' tabs have been nodes: those that left, and those
-  // here now. A resident lends nothing: it is the machine's own.
-  const live = view.nodes
-    .filter((node) => !node.resident)
-    .reduce((sum, node) => sum + since(view, node.joined), 0);
+  // The time tabs have been nodes: those that left, and those here now.
+  const live = view.nodes.reduce((sum, node) => sum + since(view, node.joined), 0);
   const hours = (view.totals.nodeSeconds + live) / SECONDS_PER_HOUR;
   tile(
     "lent",
@@ -387,9 +403,6 @@ function renderPicked(view) {
       ["carried", carried > 0 ? bytes(carried) : NONE],
       ["a node for", duration(since(view, node.joined))],
     ];
-    if (node.resident) {
-      facts.push([RESIDENT_TAG, RESIDENT_NOTE]);
-    }
   } else {
     const machine = view.machine;
     facts = [
@@ -452,7 +465,7 @@ function renderNodes(view) {
       const carried = node.pods.reduce((sum, each) => sum + each.down + each.up, 0);
       const cells = [
         { text: node.name, mono: true },
-        { text: node.resident ? `${device(node)} (${RESIDENT_TAG})` : device(node) },
+        { text: device(node) },
         { text: known(node.browser) || NONE },
         { text: near(node) || NONE },
         { text: pod ? shortPod(pod.name) + (pod.running ? "" : " (starting)") : NONE, mono: true },
@@ -468,7 +481,6 @@ function renderNodes(view) {
     }),
   );
   byId("nodes-empty").hidden = view.nodes.length > 0;
-  byId("residents-note").hidden = !view.nodes.some((node) => node.resident);
 }
 
 function renderAnswers() {
@@ -496,9 +508,9 @@ function render(view) {
   renderPicked(view);
   byId("ask-panel").hidden = !view.exposed.includes(ASK_NAME);
 
-  // A page opened from a node's own tab shows that node, once.
-  if (showFirst) {
-    globe.show(showFirst);
+  // A page opened from a node's own tab shows that node, once the node
+  // is in a reading.
+  if (showFirst && (globe.show(showFirst) || --showTriesLeft <= 0)) {
     showFirst = null;
   }
 }
@@ -534,7 +546,7 @@ async function ask() {
       text = `visit ${count(answer.visit)}, answered by a pod on ${answer.node}`;
       break;
     } catch (error) {
-      text = `no answer: ${error.message}`;
+      text = error.message.includes(NO_POD) ? NO_POD_TEXT : `no answer: ${error.message}`;
       await new Promise((resolve) => setTimeout(resolve, ASK_RETRY_MS));
     }
   }
@@ -595,6 +607,15 @@ async function start() {
   byId("ask").addEventListener("click", ask);
   byId("picked-close").addEventListener("click", () => globe.unpick());
   document.querySelectorAll("pre.yaml").forEach(colourYaml);
+
+  // The address names a node to show, now and whenever it changes.
+  readAddress();
+  addEventListener("hashchange", () => {
+    readAddress();
+    if (lastView) {
+      render(lastView);
+    }
+  });
 
   await refresh();
   setInterval(refresh, REFRESH_MS);

@@ -287,8 +287,7 @@ export function createGlobe(canvas, land, zones, onPick) {
       context.shadowBlur = 0;
     }
 
-    // The nodes: a dot for a visitor's, and a circle for a resident,
-    // which is a browser of the machine's own.
+    // The nodes.
     for (const [name, node] of nodes) {
       if (!node.at) {
         continue;
@@ -303,14 +302,8 @@ export function createGlobe(canvas, land, zones, onPick) {
       context.arc(x, y, 3, 0, 2 * Math.PI);
       context.shadowColor = color;
       context.shadowBlur = 10;
-      if (node.resident) {
-        context.lineWidth = 1.4;
-        context.strokeStyle = color;
-        context.stroke();
-      } else {
-        context.fillStyle = color;
-        context.fill();
-      }
+      context.fillStyle = color;
+      context.fill();
       context.shadowBlur = 0;
       spots.push({ name, x, y });
       ring(name, x, y);
@@ -471,7 +464,6 @@ export function createGlobe(canvas, land, zones, onPick) {
         const entry = {
           at: before?.at ?? place(node),
           busy: node.pods.some((pod) => pod.running),
-          resident: node.resident,
           carried,
         };
         if (!before && !first) {
@@ -505,14 +497,15 @@ export function createGlobe(canvas, land, zones, onPick) {
     },
 
     // Turn the globe to a node and pick it, as if its dot had been
-    // pressed. A node the globe does not have is not picked.
+    // pressed, and say whether the globe has the node.
     show(name) {
       const node = nodes.get(name);
       if (!node?.at) {
-        return;
+        return false;
       }
       spin = Math.atan2(node.at[0], node.at[2]) / RADIANS;
       pick(name);
+      return true;
     },
   };
 }

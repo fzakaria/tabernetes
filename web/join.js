@@ -30,11 +30,18 @@ const State = Object.freeze({
   UNSUPPORTED: "unsupported",
 });
 
-// The word a resident's page is given, after this name in the part of
-// its address a browser keeps to itself. A resident is a browser the
-// cluster's own machine keeps open; a visitor's address has no word.
-const RESIDENT_KEY = "resident";
-const residentWord = new URLSearchParams(location.hash.slice(1)).get(RESIDENT_KEY) ?? "";
+// A page opened with this after the # in its address keeps asking for
+// a place when it is turned away, however long that takes. A browser
+// with nobody in front of it has nobody to press the button.
+const KEEP_ASKING = "keep";
+const keepsAsking = location.hash.slice(1) === KEEP_ASKING;
+
+// Where the browser keeps the end of the name this tab had as a node,
+// and how long that end is. The tab asks for the same name when it
+// joins again, so that a node which lost its place to a restart of the
+// agent comes back as itself.
+const SUFFIX_KEY = "tabernetes-suffix";
+const SUFFIX_LENGTH = 4;
 
 // How long after the tab comes back into view a tab that lost its place
 // asks for one again.
@@ -100,7 +107,7 @@ async function describe() {
     // The time zone, which is how the site's map places the node: at
     // the zone's city, and no nearer.
     zone: Intl.DateTimeFormat().resolvedOptions().timeZone ?? "",
-    resident: residentWord,
+    suffix: remembered(),
   };
   const agent = navigator.userAgent;
 
@@ -157,6 +164,25 @@ async function describe() {
     hello.platform = "Linux";
   }
   return hello;
+}
+
+// The end of the name this tab had before, or nothing. A browser may
+// keep a page from its storage, and the tab then gets a new name.
+function remembered() {
+  try {
+    return localStorage.getItem(SUFFIX_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+// Keep the end of the name the agent gave this tab.
+function remember(name) {
+  try {
+    localStorage.setItem(SUFFIX_KEY, name.slice(-SUFFIX_LENGTH));
+  } catch {
+    // Without storage the tab is a new node each time.
+  }
 }
 
 // Whether this browser can run the guest: the kernel needs WebAssembly
@@ -258,6 +284,7 @@ async function join() {
       case FromAgent.JOINED:
         retryDelay = RETRY_FIRST_MS;
         nameElement.textContent = message.node;
+        remember(message.node);
         watchElement.href = `/#node=${encodeURIComponent(message.node)}`;
         document.title = `${message.node} · tabernetes`;
         show(State.IDLE, "Ready. Waiting for the scheduler to send a pod.");
@@ -265,10 +292,9 @@ async function join() {
         break;
       case FromAgent.REFUSED:
         nameElement.textContent = "not a node";
-        if (message.retry || residentWord) {
-          // Turned away for now: the machine is busy, or this is a
-          // resident, which waits for room however long that takes.
-          // The socket's closing asks again.
+        if (message.retry || keepsAsking) {
+          // Turned away for now: the machine is busy, or this page was
+          // opened to keep asking. The socket's closing asks again.
           show(State.LEFT, message.reason);
           break;
         }

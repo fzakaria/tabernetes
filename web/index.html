@@ -140,13 +140,13 @@
           <div class="panel">
             <h2>Boot time</h2>
             <p class="small">
-              How long a visitor's tab takes to start its pod: from the tab being handed the pod to
-              the pod's program running, which is the page loading, the kernel booting and the image
-              being mounted. The last <span id="boots-count">0</span> starts.
+              How long a tab takes to start its pod: from the tab being handed the pod to the pod's
+              program running, which is the page loading, the kernel booting and the image being
+              mounted. The last <span id="boots-count">0</span> starts.
             </p>
             <div class="bars upright" id="boots"></div>
             <ul class="ranks" id="boots-by-device"></ul>
-            <p class="empty" id="boots-empty">No visitor's pod has started yet.</p>
+            <p class="empty" id="boots-empty">No pod has started yet.</p>
           </div>
         </div>
         <div class="stack">
@@ -199,11 +199,6 @@
         </table>
       </div>
       <p class="empty" id="nodes-empty">No tab is a node right now. Yours can be the first.</p>
-      <p class="small" id="residents-note" hidden>
-        A resident is a headless browser on the cluster's own machine with the join page open, kept
-        there so the cluster always has a few nodes. Residents give their places up when the cluster
-        is full, and are left out of the totals above.
-      </p>
 
       <h2>How it works</h2>
       <ol class="steps">

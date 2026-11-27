@@ -611,10 +611,6 @@ table {
   font-size: 13.5px;
 }
 
-#residents-note {
-  margin-top: 10px;
-}
-
 /* A long table scrolls inside its own box, under headings that stay. */
 .scroll.tall {
   max-height: 440px;
