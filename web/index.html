@@ -8,6 +8,28 @@
       name="description"
       content="A Kubernetes cluster whose nodes are browser tabs. Open a page and your phone is a node."
     />
+    <link rel="canonical" href="{{.PublicURL}}/" />
+
+    <!-- What a link to the site is shown as where it is pasted. The
+         picture has to be named by its whole address, which the agent
+         fills in from its settings. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="tabernetes" />
+    <meta property="og:title" content="A Kubernetes cluster whose nodes are browser tabs" />
+    <meta
+      property="og:description"
+      content="Open a page and your phone is a node. The scheduler sends it a pod, and the pod runs on a Linux kernel booted in the tab."
+    />
+    <meta property="og:url" content="{{.PublicURL}}/" />
+    <meta property="og:image" content="{{.PublicURL}}/card.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="tabernetes: a Kubernetes cluster whose nodes are browser tabs, beside a globe of dots with lines from phones to the cluster"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+
     <link rel="icon" href="mark.svg" type="image/svg+xml" />
     <link rel="icon" href="icon-32.png" sizes="32x32" type="image/png" />
     <link rel="apple-touch-icon" href="icon-180.png" />
@@ -18,7 +40,7 @@
     <main>
       <header class="brand">
         <span class="name"><img src="mark.svg" alt="" /> tabernetes</span>
-        <a href="https://github.com/fzakaria/tabernetes">source</a>
+        <a href="https://github.com/fzakaria/tabernetes">GitHub</a>
       </header>
 
       <!-- The invitation, beside the world. -->
@@ -47,8 +69,14 @@
             id="globe"
             aria-label="A globe with a dot for each node, where its time zone's city is"
           ></canvas>
+          <div class="picked" id="picked" hidden>
+            <button type="button" class="close" id="picked-close" aria-label="Close">×</button>
+            <div class="picked-name mono" id="picked-name"></div>
+            <dl id="picked-facts"></dl>
+          </div>
           <p class="small" id="globe-note">
-            Each dot is a node, placed by its browser's time zone. Drag to turn.
+            Each dot is a node, placed by its browser's time zone. Drag to turn, pick a dot to see
+            the node.
           </p>
         </div>
       </section>
@@ -122,6 +150,13 @@
             <p><button class="button" id="ask">Send a request</button></p>
             <ul class="feed" id="answers"></ul>
           </div>
+          <div class="panel" id="services-panel" hidden>
+            <h2>Services</h2>
+            <p class="small">
+              The cluster's Services that have a pod on a tab behind them, read from the API server.
+            </p>
+            <ul class="feed" id="services"></ul>
+          </div>
           <div class="panel">
             <h2>Happening now</h2>
             <ul class="feed" id="events"></ul>
@@ -170,20 +205,30 @@
       <p class="empty" id="nodes-empty">No tab is a node right now. Yours can be the first.</p>
 
       <h2>How it works</h2>
+      <ol class="steps">
+        <li>
+          <b>A tab joins.</b> The join page holds a socket open to an agent beside the API server,
+          and the agent registers a Node for the tab.
+        </li>
+        <li>
+          <b>The scheduler sends a pod.</b> The agent starts the pod's container with
+          <a href="https://github.com/fzakaria/tabc">tabc</a>, a container runtime whose containers
+          run in browser tabs.
+        </li>
+        <li>
+          <b>The tab boots Linux.</b> A kernel compiled to WebAssembly runs the pod's program on the
+          tab's CPU and memory. The pod's files and its address stay on the cluster's machine.
+        </li>
+      </ol>
+
+      <h2>A pod asks for a tab in one line</h2>
       <div class="prose">
         <p>
-          The control plane is an ordinary Kubernetes on one small machine. Beside it runs an agent
-          that plays kubelet for every tab at once. A tab that opens the join page gets a Node. When
-          the scheduler binds a pod to that Node, the agent starts the pod's container with
-          <a href="https://github.com/fzakaria/tabc">tabc</a>, a container runtime that runs each
-          container in a browser tab, and the tab loads the container's page.
+          The control plane is an ordinary Kubernetes, and a pod is an ordinary pod. The marked line
+          is the only one that is new: the scheduler puts a pod that has it on a tab, and every
+          other pod on the cluster's own machine.
         </p>
-        <p>
-          The tab supplies the CPU and the memory. The container's files and its network stay on the
-          machine: every connection the program makes leaves from the pod's own address there, so a
-          Service reaches a pod on a phone like any other pod.
-        </p>
-        <pre>
+        <pre class="yaml" data-mark="runtimeClassName">
 apiVersion: v1
 kind: Pod
 metadata:
@@ -194,11 +239,25 @@ spec:
     - name: hello
       image: alpine
       command: ["sh", "-c", "echo hello from $(uname -m) in a tab; sleep 3600"]</pre>
-        <p class="small">
-          A node's place on the globe is the city its browser's time zone is named after, and
-          nothing finer: the site does not look up anyone's address. The land is Natural Earth's.
-        </p>
       </div>
+
+      <footer class="foot">
+        <p>
+          Made with ❤️ by
+          <a href="https://fzakaria.com">Farid Zakaria</a>
+          ·
+          <a href="https://github.com/fzakaria/tabernetes/blob/main/LICENSE">MIT</a>
+          ·
+          <a href="https://github.com/fzakaria/tabernetes">GitHub</a>
+        </p>
+        <p>
+          A node's place on the globe is the city its browser's time zone is named after. The site
+          does not look up anyone's address. The land is Natural Earth's.
+        </p>
+        {{if .Build}}
+        <p><code>{{.Build}}</code></p>
+        {{end}}
+      </footer>
     </main>
     <script type="module" src="site.js"></script>
   </body>

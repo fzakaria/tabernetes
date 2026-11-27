@@ -159,7 +159,7 @@ export function createTopology(svg) {
             class: pod ? "" : "idle",
           }),
         );
-        const lines = [`${node.name} (${device(node)})`];
+        const lines = [`${node.name} (${device(node)}${node.resident ? ", a resident" : ""})`];
         for (const each of node.pods) {
           lines.push(`${each.name}${each.running ? "" : ", starting"}`);
         }

@@ -34,6 +34,19 @@ const SCATTER_LONGITUDE = 3.2;
 const ARC_LIFT = 0.28;
 const ARC_PIECES = 36;
 
+// Picking a node: how near a dot the pointer has to be, in pixels, how
+// far a press may move and still be a pick and not a turn of the
+// globe, and the ring drawn round a dot the pointer is on and round
+// the one that was picked.
+const PICK_REACH_PX = 14;
+const PICK_SLOP_PX = 5;
+const RING_HOVER_PX = 7;
+const RING_PICKED_PX = 9;
+
+// What the machine is called where a node's name would be. No node has
+// the name: a node's name has no space in it.
+export const MACHINE = "control plane";
+
 // How long a ring spreads from a node that has just joined, how long a
 // packet takes along an arc, and the most packets in flight at once.
 const PULSE_MS = 2200;
@@ -53,6 +66,7 @@ const COLOR = {
   arc: "rgba(110, 231, 168, 0.4)",
   packet: "#ffffff",
   asked: "#ffd27a",
+  ring: "#ffffff",
 };
 
 // A point of the sphere from a latitude and a longitude.
@@ -76,9 +90,11 @@ function between(from, to, part) {
 }
 
 // Make a globe on a canvas. `land` is land.json and `zones` is
-// zones.json. The returned object is told the cluster each time the
-// page reads it, and when a visitor's request was answered.
-export function createGlobe(canvas, land, zones) {
+// zones.json. `onPick` is called with a node's name when its dot is
+// picked, with MACHINE for the machine's, and with null when the pick
+// is let go. The returned object is told the cluster each time the page
+// reads it, and when a visitor's request was answered.
+export function createGlobe(canvas, land, zones, onPick) {
   const context = canvas.getContext("2d");
 
   // The land, as points of the sphere.
@@ -93,6 +109,12 @@ export function createGlobe(canvas, land, zones) {
   let nodes = new Map();
   let pulses = [];
   let packets = [];
+
+  // Where each dot in view was last drawn, for the pointer to find, the
+  // name of the dot the pointer is on, and the name of the one picked.
+  let spots = [];
+  let hovered = null;
+  let picked = null;
 
   // How the globe is turned: the longitude and latitude facing the
   // viewer, in degrees.
@@ -159,6 +181,19 @@ export function createGlobe(canvas, land, zones) {
     const center = size / 2;
     const radius = size * SPHERE_FILL;
     const at = (point) => [center + point[0] * radius, center - point[1] * radius];
+    spots = [];
+
+    // A ring round a dot the pointer is on, or the one picked.
+    const ring = (name, x, y) => {
+      if (name !== picked && name !== hovered) {
+        return;
+      }
+      context.beginPath();
+      context.arc(x, y, name === picked ? RING_PICKED_PX : RING_HOVER_PX, 0, 2 * Math.PI);
+      context.lineWidth = name === picked ? 2 : 1.2;
+      context.strokeStyle = COLOR.ring;
+      context.stroke();
+    };
 
     // The sphere, and the light at its edge.
     const body = context.createRadialGradient(
@@ -251,8 +286,9 @@ export function createGlobe(canvas, land, zones) {
       context.shadowBlur = 0;
     }
 
-    // The nodes.
-    for (const node of nodes.values()) {
+    // The nodes: a dot for a visitor's, and a circle for a resident,
+    // which is a browser of the machine's own.
+    for (const [name, node] of nodes) {
       if (!node.at) {
         continue;
       }
@@ -264,11 +300,19 @@ export function createGlobe(canvas, land, zones) {
       const color = node.busy ? COLOR.busy : COLOR.idle;
       context.beginPath();
       context.arc(x, y, 3, 0, 2 * Math.PI);
-      context.fillStyle = color;
       context.shadowColor = color;
       context.shadowBlur = 10;
-      context.fill();
+      if (node.resident) {
+        context.lineWidth = 1.4;
+        context.strokeStyle = color;
+        context.stroke();
+      } else {
+        context.fillStyle = color;
+        context.fill();
+      }
       context.shadowBlur = 0;
+      spots.push({ name, x, y });
+      ring(name, x, y);
     }
 
     // A ring spreading from each node that has just joined.
@@ -308,14 +352,44 @@ export function createGlobe(canvas, land, zones) {
         context.arc(x, y, 2, 0, 2 * Math.PI);
         context.fillStyle = COLOR.hub;
         context.fill();
+        spots.push({ name: MACHINE, x, y });
+        ring(MACHINE, x, y);
       }
     }
+  }
+
+  // The name of the dot nearest a pointer's event, or null when no dot
+  // is within reach.
+  function under(event) {
+    const box = canvas.getBoundingClientRect();
+    const x = event.clientX - box.left;
+    const y = event.clientY - box.top;
+    let nearest = null;
+    let nearestDistance = PICK_REACH_PX;
+    for (const spot of spots) {
+      const distance = Math.hypot(spot.x - x, spot.y - y);
+      if (distance <= nearestDistance) {
+        nearest = spot.name;
+        nearestDistance = distance;
+      }
+    }
+    return nearest;
+  }
+
+  // Pick a dot, or let the pick go with null, and say so.
+  function pick(name) {
+    if (name === picked) {
+      return;
+    }
+    picked = name;
+    onPick?.(name);
   }
 
   function frame(now) {
     const elapsed = Math.min(100, now - lastFrame);
     lastFrame = now;
-    if (!dragging && !still && now - lastDrag > IDLE_AFTER_DRAG_MS) {
+    // A picked dot stays where it was picked: the globe waits.
+    if (!dragging && !still && picked === null && now - lastDrag > IDLE_AFTER_DRAG_MS) {
       spin = (spin + (SPIN_DEGREES_PER_SECOND * elapsed) / 1000) % 360;
     }
     if (visible) {
@@ -331,6 +405,9 @@ export function createGlobe(canvas, land, zones) {
   });
   canvas.addEventListener("pointermove", (event) => {
     if (!dragging) {
+      // The pointer over a dot shows that the dot can be picked.
+      hovered = under(event);
+      canvas.style.cursor = hovered ? "pointer" : "";
       return;
     }
     const perPixel = 180 / (canvas.clientWidth * SPHERE_FILL * 2);
@@ -346,8 +423,21 @@ export function createGlobe(canvas, land, zones) {
       lastDrag = performance.now();
     }
   };
-  canvas.addEventListener("pointerup", release);
+  canvas.addEventListener("pointerup", (event) => {
+    // A press that went nowhere is a pick: of the dot under it, or of
+    // nothing, which lets the last pick go.
+    const moved = dragging
+      ? Math.hypot(event.clientX - dragging.x, event.clientY - dragging.y)
+      : Infinity;
+    release();
+    if (moved <= PICK_SLOP_PX) {
+      pick(under(event));
+    }
+  });
   canvas.addEventListener("pointercancel", release);
+  canvas.addEventListener("pointerleave", () => {
+    hovered = null;
+  });
 
   // Nothing is drawn while the globe is out of view.
   new IntersectionObserver((entries) => {
@@ -380,6 +470,7 @@ export function createGlobe(canvas, land, zones) {
         const entry = {
           at: before?.at ?? place(node.zone, node.name),
           busy: node.pods.some((pod) => pod.running),
+          resident: node.resident,
           carried,
         };
         if (!before && !first) {
@@ -392,6 +483,16 @@ export function createGlobe(canvas, land, zones) {
         next.set(node.name, entry);
       }
       nodes = next;
+
+      // A picked node that has left is picked no longer.
+      if (picked !== null && picked !== MACHINE && !nodes.has(picked)) {
+        pick(null);
+      }
+    },
+
+    // Let the pick go: the card that showed it was closed.
+    unpick() {
+      pick(null);
     },
 
     // A visitor's request was answered by a pod on this node: a packet

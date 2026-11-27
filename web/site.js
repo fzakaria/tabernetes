@@ -1,7 +1,7 @@
 // The site's front page: the cluster, read from the agent every few
 // seconds and shown as a globe, a topology, some numbers and a feed.
 
-import { createGlobe } from "./globe.js";
+import { MACHINE, createGlobe } from "./globe.js";
 import { colors, createTopology } from "./topology.js";
 import {
   NONE,
@@ -57,12 +57,25 @@ const EventKind = Object.freeze({
 
 const byId = (id) => document.getElementById(id);
 
+// What marks a resident beside its name, and what a resident is, for
+// someone who picked one.
+const RESIDENT_TAG = "resident";
+const RESIDENT_NOTE =
+  "A headless browser on the cluster's own machine, there so the cluster is never empty. It gives its place up when the cluster is full.";
+
+// The parts of a line of YAML: a comment, and a key with what follows
+// its colon.
+const YAML_COMMENT = /^(\s*)(#.*)$/;
+const YAML_KEY = /^(\s*(?:- )?)([\w.-]+)(:)(.*)$/;
+
 // The views, once the globe's tables are read, the cluster as last
-// read, and the answers to this visitor's requests.
+// read, the name of the dot picked on the globe, and the answers to
+// this visitor's requests.
 let globe = null;
 let topology = null;
 let zones = {};
 let lastView = null;
+let pickedName = null;
 const answers = [];
 
 // Make an element with a class and some text.
@@ -97,7 +110,12 @@ function renderTiles(view) {
   const pods = view.nodes.flatMap((node) => node.pods);
   const running = pods.filter((pod) => pod.running).length;
   const starting = pods.length - running;
-  tile("nodes", view.nodes.length, `${Math.max(0, view.maxNodes - view.nodes.length)} places left`);
+  const residents = view.nodes.filter((node) => node.resident).length;
+  tile(
+    "nodes",
+    view.nodes.length,
+    `room for ${count(view.room)} more` + (residents > 0 ? `, ${residents} ${RESIDENT_TAG}` : ""),
+  );
   tile(
     "pods",
     running,
@@ -129,8 +147,11 @@ function renderTiles(view) {
     `this agent up ${duration(since(view, view.started))}`,
   );
 
-  // The time tabs have been nodes: those that left, and those here now.
-  const live = view.nodes.reduce((sum, node) => sum + since(view, node.joined), 0);
+  // The time visitors' tabs have been nodes: those that left, and those
+  // here now. A resident lends nothing: it is the machine's own.
+  const live = view.nodes
+    .filter((node) => !node.resident)
+    .reduce((sum, node) => sum + since(view, node.joined), 0);
   const hours = (view.totals.nodeSeconds + live) / SECONDS_PER_HOUR;
   tile(
     "lent",
@@ -317,18 +338,102 @@ function renderLegend(view) {
   byId("legend").replaceChildren(...entries);
 }
 
+// Where a time zone's city is, as a flag and a name.
+function near(zone) {
+  return [flag(zones[zone]?.[2]), city(zone)].filter(Boolean).join(" ");
+}
+
+// The card of the dot picked on the globe: a node, or the machine.
+function renderPicked(view) {
+  const card = byId("picked");
+  const node = view.nodes.find((each) => each.name === pickedName);
+  if (pickedName !== MACHINE && !node) {
+    card.hidden = true;
+    return;
+  }
+
+  // What the card says, as names and values.
+  let facts;
+  if (node) {
+    const pod = node.pods[0];
+    const carried = node.pods.reduce((sum, each) => sum + each.down + each.up, 0);
+    facts = [
+      ["device", device(node)],
+      ["browser", known(node.browser) || NONE],
+      ["near", near(node.zone) || NONE],
+      ["pod", pod ? shortPod(pod.name) + (pod.running ? "" : " (starting)") : "none yet"],
+      ["boot", pod?.running ? seconds(pod.boot) : NONE],
+      ["carried", carried > 0 ? bytes(carried) : NONE],
+      ["a node for", duration(since(view, node.joined))],
+    ];
+    if (node.resident) {
+      facts.push([RESIDENT_TAG, RESIDENT_NOTE]);
+    }
+  } else {
+    const machine = view.machine;
+    facts = [
+      ["near", near(machine.zone) || NONE],
+      ["kubernetes", machine.version],
+      ["nodes", `${view.nodes.length}, room for ${count(view.room)} more`],
+      ["agent up", duration(since(view, view.started))],
+    ];
+    if (machine.memoryTotal > 0) {
+      facts.push(
+        ["memory", `${bytes(machine.memoryAvailable)} free of ${bytes(machine.memoryTotal)}`],
+        ["CPUs busy", `${Math.round(100 * machine.busy)}%`],
+      );
+    }
+  }
+
+  byId("picked-name").textContent = pickedName;
+  byId("picked-facts").replaceChildren(
+    ...facts.flatMap(([name, value]) => [make("dt", "", name), make("dd", "", value)]),
+  );
+  card.hidden = false;
+}
+
+// The Services, each with where it listens and which nodes its pods
+// are on.
+function renderServices(view) {
+  const nodeOf = new Map();
+  for (const node of view.nodes) {
+    for (const pod of node.pods) {
+      nodeOf.set(pod.name, node.name);
+    }
+  }
+  byId("services").replaceChildren(
+    ...view.services.map((service) => {
+      const item = make("li");
+      const what = make("span", "what");
+      what.append(make("span", "mono", `svc/${shortPod(service.name)}`));
+      what.append(
+        make("span", "address mono", ` ${service.clusterIP}:${(service.ports ?? []).join(",")}`),
+      );
+      item.append(what);
+      const nodes = service.pods.map((pod) => nodeOf.get(pod)).filter(Boolean);
+      item.append(
+        make(
+          "span",
+          "when",
+          `${nodes.length} pod${nodes.length === 1 ? "" : "s"}: ${nodes.join(", ")}`,
+        ),
+      );
+      return item;
+    }),
+  );
+  byId("services-panel").hidden = view.services.length === 0;
+}
+
 function renderNodes(view) {
   byId("nodes").replaceChildren(
     ...view.nodes.map((node) => {
       const pod = node.pods[0];
       const carried = node.pods.reduce((sum, each) => sum + each.down + each.up, 0);
-      const country = zones[node.zone]?.[2];
-      const near = [flag(country), city(node.zone)].filter(Boolean).join(" ");
       const cells = [
         { text: node.name, mono: true },
-        { text: device(node) },
+        { text: node.resident ? `${device(node)} (${RESIDENT_TAG})` : device(node) },
         { text: known(node.browser) || NONE },
-        { text: near || NONE },
+        { text: near(node.zone) || NONE },
         { text: pod ? shortPod(pod.name) + (pod.running ? "" : " (starting)") : NONE, mono: true },
         { text: pod?.running ? seconds(pod.boot) : NONE },
         { text: carried > 0 ? bytes(carried) : NONE },
@@ -363,14 +468,16 @@ function render(view) {
   renderFleet(view);
   renderLegend(view);
   renderNodes(view);
+  renderServices(view);
   globe.update(view);
   topology.update(view);
+  renderPicked(view);
   byId("ask-panel").hidden = !view.exposed.includes(ASK_NAME);
 
   // The nodes whose time zone the globe's table does not have.
   const unplaced = view.nodes.length - globe.placed();
   byId("globe-note").textContent =
-    "Each dot is a node, placed by its browser's time zone. Drag to turn." +
+    "Each dot is a node, placed by its browser's time zone. Drag to turn, pick a dot to see the node." +
     (unplaced > 0 ? ` ${unplaced} more gave no zone the map knows.` : "");
 }
 
@@ -422,14 +529,50 @@ async function ask() {
   button.disabled = false;
 }
 
+// Colour a listing of YAML: its comments, its keys and what each key
+// is set to, with a mark on every line that has the word the listing
+// asks to have marked (data-mark).
+function colourYaml(listing) {
+  const marked = listing.dataset.mark;
+  const lines = listing.textContent.split("\n").map((text) => {
+    const line = make("span", marked && text.includes(marked) ? "line mark" : "line");
+    const comment = YAML_COMMENT.exec(text);
+    const key = YAML_KEY.exec(text);
+    if (comment) {
+      line.append(comment[1], make("span", "comment", comment[2]));
+    } else if (key) {
+      line.append(key[1], make("span", "key", key[2]), key[3], make("span", "value", key[4]));
+    } else {
+      line.append(text);
+    }
+    line.append("\n");
+    return line;
+  });
+  listing.replaceChildren(...lines);
+}
+
 async function start() {
   const [land, table] = await Promise.all(
     [LAND_PATH, ZONES_PATH].map((path) => fetch(path).then((response) => response.json())),
   );
   zones = table;
-  globe = createGlobe(byId("globe"), land, zones);
+  globe = createGlobe(byId("globe"), land, zones, (name) => {
+    // A dot was picked, or the pick let go: the card follows, and the
+    // node is shown in the topology too.
+    pickedName = name;
+    if (!lastView) {
+      return;
+    }
+    renderPicked(lastView);
+    if (name && name !== MACHINE) {
+      topology.asked(name);
+      topology.update(lastView);
+    }
+  });
   topology = createTopology(byId("topology"));
   byId("ask").addEventListener("click", ask);
+  byId("picked-close").addEventListener("click", () => globe.unpick());
+  document.querySelectorAll("pre.yaml").forEach(colourYaml);
 
   await refresh();
   setInterval(refresh, REFRESH_MS);

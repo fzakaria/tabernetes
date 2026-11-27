@@ -76,25 +76,27 @@ header.brand {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-weight: 600;
-  font-size: 18px;
-  margin-bottom: 16px;
+  font-weight: 700;
+  font-size: 28px;
+  letter-spacing: -0.02em;
+  margin: 4px 0 18px;
 }
 
 header.brand .name {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
 }
 
 header.brand img {
-  width: 28px;
-  height: 28px;
+  width: 44px;
+  height: 44px;
 }
 
 header.brand a {
   font-weight: 500;
-  font-size: 14px;
+  font-size: 15px;
+  letter-spacing: 0;
 }
 
 h1 {
@@ -213,8 +215,60 @@ main > h2 {
 }
 
 .world {
+  position: relative;
   text-align: center;
   min-width: 0;
+}
+
+/* The card of the dot that was picked, over a corner of the globe. */
+.picked {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: min(270px, 78%);
+  text-align: left;
+  background: rgba(10, 16, 34, 0.92);
+  border: 1px solid var(--space-line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 13px;
+  backdrop-filter: blur(4px);
+}
+
+.picked-name {
+  font-weight: 600;
+  font-size: 14px;
+  margin: 0 22px 8px 0;
+  overflow-wrap: anywhere;
+}
+
+.picked dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 12px;
+  margin: 0;
+}
+
+.picked dt {
+  color: var(--space-muted);
+}
+
+.picked dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.picked .close {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  background: none;
+  border: 0;
+  color: var(--space-muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
 }
 
 .world canvas {
@@ -459,6 +513,22 @@ main > h2 {
   flex: 1;
 }
 
+.feed .address {
+  color: var(--muted);
+}
+
+/* A Service: its name and address on one line, and the nodes its pods
+   are on under them. */
+#services li {
+  flex-direction: column;
+  gap: 2px;
+}
+
+#services .when {
+  text-align: left;
+  white-space: normal;
+}
+
 /* Bars lying down. */
 .bars .bar-row {
   display: grid;
@@ -565,6 +635,78 @@ th {
   max-width: 70ch;
 }
 
+/* How it works: three steps side by side. */
+.steps {
+  list-style: none;
+  counter-reset: step;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+}
+
+.steps li {
+  counter-increment: step;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+  font-size: 14.5px;
+}
+
+.steps li::before {
+  content: counter(step);
+  display: block;
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 20px;
+  margin-bottom: 4px;
+}
+
+/* A listing of YAML, coloured by site.js. */
+pre.yaml .key {
+  color: var(--accent);
+}
+
+pre.yaml .value {
+  color: var(--ink);
+}
+
+pre.yaml .comment {
+  color: var(--muted);
+}
+
+pre.yaml .line {
+  display: block;
+  margin: 0 -12px;
+  padding: 0 12px;
+}
+
+pre.yaml .line.mark {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* The foot of the front page. */
+footer.foot {
+  margin-top: 48px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 14px;
+  text-align: center;
+}
+
+footer.foot p {
+  margin: 0 0 8px;
+}
+
+footer.foot code {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 pre {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -605,8 +747,18 @@ pre {
   }
 
   .pair,
-  .pair.wide-left {
+  .pair.wide-left,
+  .steps {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  header.brand {
+    font-size: 24px;
+  }
+
+  header.brand img {
+    width: 38px;
+    height: 38px;
   }
 
   .hero .invite {
