@@ -139,7 +139,11 @@
         </div>
       </section>
 
-      <!-- Who is connected to what, and what just happened. -->
+      <!-- Who is connected to what, and what just happened. The
+           picture of the cluster and the two charts are on the left,
+           and what a visitor can press and the lists are on the right:
+           the two sides come to about the same height, which is what
+           keeps either from ending long before the other. -->
       <section class="pair wide-left">
         <div class="stack">
           <div class="panel">
@@ -165,6 +169,18 @@
             <div class="bars upright" id="boots"></div>
             <ul class="ranks" id="boots-by-device"></ul>
             <p class="empty" id="boots-empty">No pod has started yet.</p>
+          </div>
+          <div class="panel" id="asks-panel" hidden>
+            <h2>Request latency</h2>
+            <p class="small">
+              How long the cluster takes to answer: from the agent handing a request to the Service
+              to the answer being back from a pod in someone's tab, timed on the cluster's machine.
+              The last <span id="asks-count">0</span> requests, from every visitor, by the
+              milliseconds each took.
+            </p>
+            <div class="bars upright" id="asks"></div>
+            <ul class="ranks" id="asks-facts"></ul>
+            <p class="empty" id="asks-empty">No request has been answered yet.</p>
           </div>
         </div>
         <div class="stack">
@@ -197,18 +213,6 @@
               </div>
             </div>
             <div class="legend" id="picture-devices"></div>
-          </div>
-          <div class="panel" id="asks-panel" hidden>
-            <h2>Request latency</h2>
-            <p class="small">
-              How long the cluster takes to answer: from the agent handing a request to the Service
-              to the answer being back from a pod in someone's tab, timed on the cluster's machine.
-              The last <span id="asks-count">0</span> requests, from every visitor, by the
-              milliseconds each took.
-            </p>
-            <div class="bars upright" id="asks"></div>
-            <ul class="ranks" id="asks-facts"></ul>
-            <p class="empty" id="asks-empty">No request has been answered yet.</p>
           </div>
           <div class="panel" id="services-panel" hidden>
             <h2>Services</h2>
