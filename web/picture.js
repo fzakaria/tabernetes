@@ -244,7 +244,7 @@ function renderDevices() {
   const shown = everyDevice ? all : all.slice(0, DEVICES_NAMED);
   const keys = shown.map(([node, tiles]) => {
     const key = make("span", "key");
-    key.append(nodeLink(node), make("span", "tiles", `×${tiles}`));
+    key.append(nodeLink(node), make("span", "times", `×${tiles}`));
     key.addEventListener("pointerenter", () => pick(node, null));
     key.addEventListener("pointerleave", () => pick(null, null));
     return key;
