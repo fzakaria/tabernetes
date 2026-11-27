@@ -186,6 +186,50 @@ pods answer is for the cluster and not for visitors. A request that
 fails is tried again by the page, since the pod it was sent to may have
 just lost its tab.
 
+A node's own page wants its own pod, and the Service picks whichever
+pod it likes. `/nodes/<node>/apps/counter/...` is carried to the pod of
+that Service on that node, at the pod's own address, under the same
+limits. The join page's "Send a request to my pod" button uses it, and
+so does the page's tally of what the node has done, which the demo's
+web server keeps and answers at `/tally`. The tally is exposed under a
+name of its own (`tally=default/web:8000/tally`), so that every node
+asking every fifteen seconds is not counted among the requests visitors
+send.
+
+## A shell in a tab's pod
+
+The join page shows the pod's terminal, which is the pod's log. A pod
+can also let its tab open a shell, with an annotation that names the
+shell's user:
+
+    tabernetes.dev/shell: nobody
+
+The page then has an "Open a shell" button. The agent runs
+`tabc exec -it -u nobody <container> sh` on a terminal of the
+machine's and carries what is typed and printed over a WebSocket
+(`/shells/<container>`). tabc asks the container's page to start the
+program in the guest, so the shell runs in the tab, and its keys and
+its output pass through the machine. From the kubelet down this is the
+path `kubectl exec` takes on any node. `kubectl exec` itself is still
+missing: the agent does not serve the API server's exec request.
+
+The tab is a stranger, and a shell makes mischief a line to type, so:
+
+- A pod without the annotation gives no shell. The demo's two pods
+  have it.
+- The socket's address holds the container's id, which only the tab
+  that runs the container was given.
+- A shell costs the machine about 3 MB while open. One is refused
+  while the machine is as short of memory or as busy as turns a new
+  node away, a container has one at a time, and a shell is closed after
+  five minutes with nothing typed or twenty in all.
+- Output is carried at 32 KiB a second, so `yes` costs the machine
+  little.
+
+Checked from the page's shell in the demo's web pod: `id` is nobody,
+the pod's own files cannot be written, Redis refuses `FLUSHALL`, and
+the internet is refused.
+
 ## A picture every tab renders
 
 The site's "Render a picture" button has every tab work on one thing: a
@@ -237,6 +281,20 @@ tab: a Service answered, and the internet by address and by name, the
 API server and the machine's own ports were all refused. Names still
 resolve through the cluster's DNS, which forwards outside names, so a
 pod can ask about any name.
+
+What a pod writes stays in the tab: the image is read-only, and the
+writable layer over it is in the guest's memory. A volume is the
+exception, since a volume is a directory on the machine. The guest's
+kernel is what checks who may write there, and the kernel is the tab's.
+So the one directory a `hostPath` may be under
+(`--host-path-root`, `/var/lib/tabernetes/data`) is a 512 MB
+filesystem of its own (`deploy/setup.sh`): a tab that fills its volume
+stops the pod that uses the volume, and not the machine.
+
+Other pods are the last thing in reach. The demo's Redis takes
+connections from every pod and none of them can hold a password, so
+whoever connects may run `INCR` and `GET` on the one key the demo
+counts in, and nothing else.
 
 ## How many nodes
 

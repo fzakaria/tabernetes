@@ -47,6 +47,11 @@ press Join. The tab becomes a node, named after the device, and shows
 the pod it was given: a terminal on a Linux that is running in the tab.
 Close the tab to leave.
 
+The terminal is the pod's log. Under it the tab can open a shell in the
+pod, which is what `kubectl exec` would give on any other node. The
+page also counts what the node has done, and has a button that sends a
+request to the node's own pod.
+
 The page also shows the cluster: a globe with a dot for each node that
 can be picked, the Services and the pods behind them, and a button that
 sends a request to a web server on someone's phone. Another button has
@@ -95,6 +100,8 @@ What a tab's pod can have:
   `hostPath` volumes, `restartPolicy`, an HTTP `readinessProbe`.
   `kubectl logs` works. `kubectl exec`, init containers, config maps
   and secrets do not, yet.
+- A shell for its tab, if the pod allows one with the annotation
+  `tabernetes.dev/shell: nobody`, which names the shell's user.
 - Other pods and Services to talk to, and nothing else. A pod on a tab
   is a stranger's browser speaking from the cluster's machine, so the
   machine's firewall refuses it the internet, the API server and the
