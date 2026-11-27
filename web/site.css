@@ -82,10 +82,14 @@ header.brand {
   margin: 4px 0 18px;
 }
 
+/* The site's name, which is a link to the front page and reads as the
+   name it is. */
 header.brand .name {
   display: flex;
   align-items: center;
   gap: 12px;
+  color: inherit;
+  text-decoration: none;
 }
 
 header.brand img {
@@ -93,7 +97,7 @@ header.brand img {
   height: 44px;
 }
 
-header.brand a {
+header.brand a:not(.name) {
   font-weight: 500;
   font-size: 15px;
   letter-spacing: 0;
