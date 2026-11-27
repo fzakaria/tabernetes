@@ -30,6 +30,19 @@ const SCREEN = { width: 24, height: 16, corner: 3 };
 const LABELS_UP_TO = 28;
 const LABEL_LETTERS = 19;
 
+// More nodes than that are a crowd: small squares, packed into rings
+// from the drawing's edge inwards, as large as lets every node in
+// before the rings reach the room kept for the Services. The sizes are
+// tried largest first, and a square is this far from the next.
+const CROWD_OUTER = 300;
+const CROWD_INNER = 160;
+const CROWD_GAP = 3;
+const CROWD_SIZES = [18, 15, 12, 10, 8, 6, 5, 4, 3];
+
+// Services whose pods lie the same way are set at least this far
+// apart, in radians, so that their names do not sit on each other.
+const SERVICE_APART = 0.9;
+
 // The colours workloads are given, in the order their names sort, and
 // the colour of a node that has no pod.
 const PALETTE = [
@@ -63,6 +76,36 @@ function element(name, attributes, text) {
 // Where an angle and a distance from the middle are.
 function polar(angle, distance) {
   return [CENTER + Math.cos(angle) * distance, CENTER + Math.sin(angle) * distance];
+}
+
+// Where each of a crowd of nodes goes, and how big each is drawn: the
+// rings are filled from the outermost in, each with as many squares as
+// fit round it, and the last ring's are spread evenly.
+function crowd(count) {
+  for (const size of CROWD_SIZES) {
+    const rings = [];
+    let left = count;
+    for (let radius = CROWD_OUTER; radius >= CROWD_INNER && left > 0; radius -= size + CROWD_GAP) {
+      const holds = Math.floor((2 * Math.PI * radius) / (size + CROWD_GAP));
+      const here = Math.min(holds, left);
+      rings.push({ radius, count: here });
+      left -= here;
+    }
+    if (left > 0 && size !== CROWD_SIZES.at(-1)) {
+      continue;
+    }
+    const spots = [];
+    for (const ring of rings) {
+      for (let index = 0; index < ring.count; index++) {
+        spots.push({
+          angle: -Math.PI / 2 + (2 * Math.PI * index) / ring.count,
+          radius: ring.radius,
+        });
+      }
+    }
+    return { size, spots };
+  }
+  return { size: CROWD_SIZES.at(-1), spots: [] };
 }
 
 // A Service's name without the namespace everything is in by default.
@@ -107,13 +150,19 @@ export function createTopology(svg) {
         labels: element("g", { class: "labels" }),
       };
 
-      // The nodes, evenly around the ring, the oldest at the top.
+      // The nodes: a few go evenly around one ring with their names
+      // beside them, the oldest at the top, and a crowd is packed into
+      // rings of squares.
+      const crowded = view.nodes.length > LABELS_UP_TO;
+      const packed = crowded ? crowd(view.nodes.length) : null;
       const places = new Map();
       const podNode = new Map();
       const carriedNow = new Map();
       for (const [index, node] of view.nodes.entries()) {
-        const angle = -Math.PI / 2 + (2 * Math.PI * index) / Math.max(1, view.nodes.length);
-        const [x, y] = polar(angle, NODE_RING);
+        const spot = packed?.spots[index];
+        const angle =
+          spot?.angle ?? -Math.PI / 2 + (2 * Math.PI * index) / Math.max(1, view.nodes.length);
+        const [x, y] = polar(angle, spot?.radius ?? NODE_RING);
         places.set(node.name, { angle, x, y });
         for (const pod of node.pods) {
           podNode.set(pod.name, node.name);
@@ -121,9 +170,12 @@ export function createTopology(svg) {
         const carried = node.pods.reduce((sum, pod) => sum + pod.down + pod.up, 0);
         carriedNow.set(node.name, carried);
 
-        // The spoke, and a dot along it when the node's pods have
-        // carried something since the last reading.
-        layers.spokes.append(element("line", { x1: CENTER, y1: CENTER, x2: x, y2: y }));
+        // The spoke, which a crowd goes without, and a dot along it
+        // when the node's pods have carried something since the last
+        // reading.
+        if (!crowded) {
+          layers.spokes.append(element("line", { x1: CENTER, y1: CENTER, x2: x, y2: y }));
+        }
         if (carried > (carriedBefore.get(node.name) ?? carried)) {
           const pulse = element("circle", { r: 2.4 });
           pulse.append(
@@ -137,9 +189,13 @@ export function createTopology(svg) {
           layers.pulses.append(pulse);
         }
 
-        // The node: a phone or a screen, turned to face the middle,
+        // The node: a phone or a screen, or one square of a crowd,
         // filled with its pod's colour when the pod is running.
-        const shape = HANDHELD.has(node.platform) ? PHONE : SCREEN;
+        const shape = crowded
+          ? { width: packed.size, height: packed.size, corner: packed.size / 4 }
+          : HANDHELD.has(node.platform)
+            ? PHONE
+            : SCREEN;
         const pod = node.pods[0];
         const color = pod ? palette.get(pod.app) : null;
         const group = element("g", {
@@ -166,7 +222,7 @@ export function createTopology(svg) {
         group.append(element("title", {}, lines.join("\n")));
         layers.nodes.append(group);
 
-        if (view.nodes.length <= LABELS_UP_TO) {
+        if (!crowded) {
           // Along the spoke, reading outwards on the right half of the
           // ring and inwards on the left, so that no name is upside
           // down.
@@ -194,7 +250,8 @@ export function createTopology(svg) {
 
       // The Services, each at the middle of the angles of its pods'
       // nodes, with a line to each.
-      for (const [index, service] of view.services.entries()) {
+      const hubs = [];
+      for (const service of view.services) {
         const targets = service.pods
           .map((pod) => places.get(podNode.get(pod)))
           .filter((place) => place !== undefined);
@@ -203,12 +260,21 @@ export function createTopology(svg) {
         }
         const sumX = targets.reduce((sum, place) => sum + Math.cos(place.angle), 0);
         const sumY = targets.reduce((sum, place) => sum + Math.sin(place.angle), 0);
-        const angle = Math.atan2(sumY, sumX);
+        hubs.push({ service, targets, angle: Math.atan2(sumY, sumX) });
+      }
 
-        // Services whose pods lie the same way would sit on top of each
-        // other, so each takes the next of a few distances in turn, and
-        // its name goes above or below it by turns.
-        const [x, y] = polar(angle, SERVICE_RING + (index % SERVICE_STEPS) * SERVICE_STEP);
+      // Services whose pods lie the same way would sit on top of each
+      // other: going round, each is pushed on from the one before it,
+      // each takes the next of a few distances in turn, and its name
+      // goes above or below it by turns.
+      hubs.sort((a, b) => a.angle - b.angle);
+      const apart = Math.min(SERVICE_APART, (2 * Math.PI) / Math.max(1, hubs.length));
+      for (const [index, hub] of hubs.entries()) {
+        if (index > 0 && hub.angle - hubs[index - 1].angle < apart) {
+          hub.angle = hubs[index - 1].angle + apart;
+        }
+        const { service, targets } = hub;
+        const [x, y] = polar(hub.angle, SERVICE_RING + (index % SERVICE_STEPS) * SERVICE_STEP);
         const labelOffset = index % 2 === 0 ? -13 : 20;
 
         const pod = view.nodes

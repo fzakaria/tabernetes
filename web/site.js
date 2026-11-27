@@ -35,7 +35,7 @@ const ASK_TRIES = 3;
 const ASK_RETRY_MS = 300;
 
 // How much of each list is shown.
-const EVENTS_SHOWN = 12;
+const EVENTS_SHOWN = 8;
 const ANSWERS_SHOWN = 5;
 const FLEET_SHOWN = 6;
 const DEVICES_RANKED = 5;
@@ -78,6 +78,11 @@ let lastView = null;
 let pickedName = null;
 const answers = [];
 
+// The node a visitor came to see: the name after this in the page's
+// address, which a node's own tab puts in its link to this page.
+const NODE_KEY = "node";
+let showFirst = new URLSearchParams(location.hash.slice(1)).get(NODE_KEY);
+
 // Make an element with a class and some text.
 function make(tag, className, text) {
   const element = document.createElement(tag);
@@ -114,7 +119,7 @@ function renderTiles(view) {
   tile(
     "nodes",
     view.nodes.length,
-    `room for ${count(view.room)} more` + (residents > 0 ? `, ${residents} ${RESIDENT_TAG}` : ""),
+    `room for ${count(view.room)} more` + (residents > 0 ? `, ${residents} the cluster's own` : ""),
   );
   tile(
     "pods",
@@ -122,12 +127,12 @@ function renderTiles(view) {
     starting > 0 ? `${starting} starting` : `${count(view.totals.podsStarted)} started in all`,
   );
 
-  // The countries, from the nodes' time zones.
+  // The countries the nodes are in.
   const countries = new Set();
   for (const node of view.nodes) {
-    const entry = zones[node.zone];
-    if (entry) {
-      countries.add(entry[2]);
+    const code = country(node);
+    if (code) {
+      countries.add(code);
     }
   }
   const flags = [...countries].sort().slice(0, FLAGS_SHOWN).map(flag).join(" ");
@@ -217,6 +222,8 @@ function barRow(name, value, most, color) {
 
 function renderBoots(view) {
   byId("boots-count").textContent = view.boots.length;
+  byId("boots").hidden = view.boots.length === 0;
+  byId("boots-empty").hidden = view.boots.length > 0;
 
   // One bar a second, the last for everything slower.
   const bars = new Array(BOOT_BARS).fill(0);
@@ -339,8 +346,22 @@ function renderLegend(view) {
 }
 
 // Where a time zone's city is, as a flag and a name.
-function near(zone) {
+function nearZone(zone) {
   return [flag(zones[zone]?.[2]), city(zone)].filter(Boolean).join(" ");
+}
+
+// The country a node is in, as its two-letter code: where the agent
+// says its address is, or else its time zone's.
+function country(node) {
+  return node.placed ? node.country : zones[node.zone]?.[2];
+}
+
+// Roughly where a node is, as a flag and a city's name.
+function near(node) {
+  if (!node.placed) {
+    return nearZone(node.zone);
+  }
+  return [flag(node.country), node.city].filter(Boolean).join(" ");
 }
 
 // The card of the dot picked on the globe: a node, or the machine.
@@ -360,7 +381,7 @@ function renderPicked(view) {
     facts = [
       ["device", device(node)],
       ["browser", known(node.browser) || NONE],
-      ["near", near(node.zone) || NONE],
+      ["near", near(node) || NONE],
       ["pod", pod ? shortPod(pod.name) + (pod.running ? "" : " (starting)") : "none yet"],
       ["boot", pod?.running ? seconds(pod.boot) : NONE],
       ["carried", carried > 0 ? bytes(carried) : NONE],
@@ -372,7 +393,7 @@ function renderPicked(view) {
   } else {
     const machine = view.machine;
     facts = [
-      ["near", near(machine.zone) || NONE],
+      ["near", nearZone(machine.zone) || NONE],
       ["kubernetes", machine.version],
       ["nodes", `${view.nodes.length}, room for ${count(view.room)} more`],
       ["agent up", duration(since(view, view.started))],
@@ -433,7 +454,7 @@ function renderNodes(view) {
         { text: node.name, mono: true },
         { text: node.resident ? `${device(node)} (${RESIDENT_TAG})` : device(node) },
         { text: known(node.browser) || NONE },
-        { text: near(node.zone) || NONE },
+        { text: near(node) || NONE },
         { text: pod ? shortPod(pod.name) + (pod.running ? "" : " (starting)") : NONE, mono: true },
         { text: pod?.running ? seconds(pod.boot) : NONE },
         { text: carried > 0 ? bytes(carried) : NONE },
@@ -447,6 +468,7 @@ function renderNodes(view) {
     }),
   );
   byId("nodes-empty").hidden = view.nodes.length > 0;
+  byId("residents-note").hidden = !view.nodes.some((node) => node.resident);
 }
 
 function renderAnswers() {
@@ -474,11 +496,11 @@ function render(view) {
   renderPicked(view);
   byId("ask-panel").hidden = !view.exposed.includes(ASK_NAME);
 
-  // The nodes whose time zone the globe's table does not have.
-  const unplaced = view.nodes.length - globe.placed();
-  byId("globe-note").textContent =
-    "Each dot is a node, placed by its browser's time zone. Drag to turn, pick a dot to see the node." +
-    (unplaced > 0 ? ` ${unplaced} more gave no zone the map knows.` : "");
+  // A page opened from a node's own tab shows that node, once.
+  if (showFirst) {
+    globe.show(showFirst);
+    showFirst = null;
+  }
 }
 
 // Read the cluster and show it.

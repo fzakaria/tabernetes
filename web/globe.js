@@ -1,6 +1,6 @@
-// The globe: the world as dots, each node where its time zone's city
-// is, and a line from each node that runs a pod to the cluster's own
-// machine.
+// The globe: the world as dots, each node roughly where its address
+// is, or at its time zone's city when the agent could not tell, and a
+// line from each node that runs a pod to the cluster's own machine.
 //
 // Drawn on a canvas, by hand. The land is a list of points on the
 // sphere (land.json, from tools/globe-data.py), and everything else is
@@ -126,15 +126,16 @@ export function createGlobe(canvas, land, zones, onPick) {
   let visible = true;
   const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  // Where a zone's city is on the sphere, or null for a zone the table
-  // does not have.
-  function place(zone, name) {
-    const entry = zones[zone];
+  // Where a node is on the sphere: where the agent says its address
+  // is, or else its time zone's city, set a little apart from other
+  // nodes of the same place. Null for a node with neither.
+  function place(node) {
+    const entry = node.placed ? [node.latitude, node.longitude] : zones[node.zone];
     if (!entry) {
       return null;
     }
-    const latitude = entry[0] + (scatter(name, 1) - 0.5) * SCATTER_LATITUDE;
-    const longitude = entry[1] + (scatter(name, 2) - 0.5) * SCATTER_LONGITUDE;
+    const latitude = entry[0] + (scatter(node.name, 1) - 0.5) * SCATTER_LATITUDE;
+    const longitude = entry[1] + (scatter(node.name, 2) - 0.5) * SCATTER_LONGITUDE;
     return onSphere(latitude, longitude);
   }
 
@@ -468,7 +469,7 @@ export function createGlobe(canvas, land, zones, onPick) {
         const before = nodes.get(node.name);
         const carried = node.pods.reduce((sum, pod) => sum + pod.down + pod.up, 0);
         const entry = {
-          at: before?.at ?? place(node.zone, node.name),
+          at: before?.at ?? place(node),
           busy: node.pods.some((pod) => pod.running),
           resident: node.resident,
           carried,
@@ -503,9 +504,15 @@ export function createGlobe(canvas, land, zones, onPick) {
       packets.push({ node: name, started: now + PACKET_MS, toHub: true, asked: true });
     },
 
-    // How many of the nodes have a place on the globe.
-    placed() {
-      return [...nodes.values()].filter((node) => node.at).length;
+    // Turn the globe to a node and pick it, as if its dot had been
+    // pressed. A node the globe does not have is not picked.
+    show(name) {
+      const node = nodes.get(name);
+      if (!node?.at) {
+        return;
+      }
+      spin = Math.atan2(node.at[0], node.at[2]) / RADIANS;
+      pick(name);
     },
   };
 }
