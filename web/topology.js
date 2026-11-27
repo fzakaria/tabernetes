@@ -29,6 +29,7 @@ const SCREEN = { width: 24, height: 16, corner: 3 };
 // edge is cut short.
 const LABELS_UP_TO = 28;
 const LABEL_LETTERS = 19;
+const LABEL_END = 5;
 
 // More nodes than that are a crowd: small squares, packed into rings
 // from the drawing's edge inwards, as large as lets every node in
@@ -68,6 +69,13 @@ const HANDHELD = new Set(["Android", "iOS"]);
 // How long a dot takes from the machine to a node along its spoke.
 const PULSE_SECONDS = 0.9;
 
+// A visitor's own request, on its way from the machine through the
+// Service to the pod that answered: the dot's colour and size, and how
+// long the way takes.
+const ASKED_COLOR = "#ffb020";
+const ASKED_RADIUS = 4.5;
+const ASKED_SECONDS = 1.2;
+
 function element(name, attributes, text) {
   const made = document.createElementNS(SVG, name);
   for (const [key, value] of Object.entries(attributes ?? {})) {
@@ -81,7 +89,10 @@ function element(name, attributes, text) {
 
 // Where an angle and a distance from the middle are.
 function polar(angle, distance) {
-  return [CENTER + Math.cos(angle) * distance, CENTER + Math.sin(angle) * distance];
+  return [
+    CENTER + Math.cos(angle) * distance,
+    CENTER + Math.sin(angle) * distance,
+  ];
 }
 
 // Where each of a crowd of nodes goes, and how big each is drawn: the
@@ -91,7 +102,11 @@ function crowd(count) {
   for (const size of CROWD_SIZES) {
     const rings = [];
     let left = count;
-    for (let radius = CROWD_OUTER; radius >= CROWD_INNER && left > 0; radius -= size + CROWD_GAP) {
+    for (
+      let radius = CROWD_OUTER;
+      radius >= CROWD_INNER && left > 0;
+      radius -= size + CROWD_GAP
+    ) {
       const holds = Math.floor((2 * Math.PI * radius) / (size + CROWD_GAP));
       const here = Math.min(holds, left);
       rings.push({ radius, count: here });
@@ -167,20 +182,26 @@ export function createTopology(svg) {
       for (const [index, node] of view.nodes.entries()) {
         const spot = packed?.spots[index];
         const angle =
-          spot?.angle ?? -Math.PI / 2 + (2 * Math.PI * index) / Math.max(1, view.nodes.length);
+          spot?.angle ??
+          -Math.PI / 2 + (2 * Math.PI * index) / Math.max(1, view.nodes.length);
         const [x, y] = polar(angle, spot?.radius ?? NODE_RING);
         places.set(node.name, { angle, x, y });
         for (const pod of node.pods) {
           podNode.set(pod.name, node.name);
         }
-        const carried = node.pods.reduce((sum, pod) => sum + pod.down + pod.up, 0);
+        const carried = node.pods.reduce(
+          (sum, pod) => sum + pod.down + pod.up,
+          0,
+        );
         carriedNow.set(node.name, carried);
 
         // The spoke, which a crowd goes without, and a dot along it
         // when the node's pods have carried something since the last
         // reading.
         if (!crowded) {
-          layers.spokes.append(element("line", { x1: CENTER, y1: CENTER, x2: x, y2: y }));
+          layers.spokes.append(
+            element("line", { x1: CENTER, y1: CENTER, x2: x, y2: y }),
+          );
         }
         if (carried > (carriedBefore.get(node.name) ?? carried)) {
           const pulse = element("circle", { r: 2.4 });
@@ -251,8 +272,10 @@ export function createTopology(svg) {
                 "text-anchor": left ? "end" : "start",
                 "dominant-baseline": "middle",
               },
+              // A long name loses its middle, not its end: the end is
+              // what tells two nodes of one device apart.
               node.name.length > LABEL_LETTERS
-                ? `${node.name.slice(0, LABEL_LETTERS - 1)}…`
+                ? `${node.name.slice(0, LABEL_LETTERS - LABEL_END - 1)}…${node.name.slice(-LABEL_END)}`
                 : node.name,
             ),
           );
@@ -270,8 +293,14 @@ export function createTopology(svg) {
         if (targets.length === 0) {
           continue;
         }
-        const sumX = targets.reduce((sum, place) => sum + Math.cos(place.angle), 0);
-        const sumY = targets.reduce((sum, place) => sum + Math.sin(place.angle), 0);
+        const sumX = targets.reduce(
+          (sum, place) => sum + Math.cos(place.angle),
+          0,
+        );
+        const sumY = targets.reduce(
+          (sum, place) => sum + Math.sin(place.angle),
+          0,
+        );
         hubs.push({ service, targets, angle: Math.atan2(sumY, sumX) });
       }
 
@@ -280,13 +309,35 @@ export function createTopology(svg) {
       // each takes the next of a few distances in turn, and its name
       // goes above or below it by turns.
       hubs.sort((a, b) => a.angle - b.angle);
-      const apart = Math.min(SERVICE_APART, (2 * Math.PI) / Math.max(1, hubs.length));
+      const apart = Math.min(
+        SERVICE_APART,
+        (2 * Math.PI) / Math.max(1, hubs.length),
+      );
       for (const [index, hub] of hubs.entries()) {
         if (index > 0 && hub.angle - hubs[index - 1].angle < apart) {
           hub.angle = hubs[index - 1].angle + apart;
         }
         const { service, targets } = hub;
-        const [x, y] = polar(hub.angle, SERVICE_RING + (index % SERVICE_STEPS) * SERVICE_STEP);
+        const [x, y] = polar(
+          hub.angle,
+          SERVICE_RING + (index % SERVICE_STEPS) * SERVICE_STEP,
+        );
+
+        // The visitor's request, if a pod behind this Service answered
+        // it: a dot from the machine to the Service and on to the node.
+        const answered = places.get(flashed);
+        if (answered && targets.includes(answered)) {
+          const dot = element("circle", { r: ASKED_RADIUS, fill: ASKED_COLOR });
+          dot.append(
+            element("animateMotion", {
+              dur: `${ASKED_SECONDS}s`,
+              repeatCount: 1,
+              fill: "freeze",
+              path: `M${CENTER},${CENTER} L${x},${y} L${answered.x},${answered.y}`,
+            }),
+          );
+          layers.pulses.append(dot);
+        }
         const labelOffset = index % 2 === 0 ? -13 : 20;
 
         const pod = view.nodes
@@ -294,7 +345,14 @@ export function createTopology(svg) {
           .find((each) => each.name === service.pods[0]);
         const color = palette.get(pod?.app) ?? "currentColor";
         layers.links.append(
-          element("line", { x1: CENTER, y1: CENTER, x2: x, y2: y, stroke: color, class: "trunk" }),
+          element("line", {
+            x1: CENTER,
+            y1: CENTER,
+            x2: x,
+            y2: y,
+            stroke: color,
+            class: "trunk",
+          }),
         );
         const opacity = Math.min(
           LINK_OPACITY,
@@ -302,10 +360,20 @@ export function createTopology(svg) {
         );
         for (const place of targets) {
           layers.links.append(
-            element("line", { x1: x, y1: y, x2: place.x, y2: place.y, stroke: color, opacity }),
+            element("line", {
+              x1: x,
+              y1: y,
+              x2: place.x,
+              y2: place.y,
+              stroke: color,
+              opacity,
+            }),
           );
         }
-        const group = element("g", { class: "service", transform: `translate(${x},${y})` });
+        const group = element("g", {
+          class: "service",
+          transform: `translate(${x},${y})`,
+        });
         group.append(element("circle", { r: 7, fill: color }));
         group.append(
           element(
@@ -318,9 +386,14 @@ export function createTopology(svg) {
       }
 
       // The machine.
-      const hub = element("g", { class: "hub", transform: `translate(${CENTER},${CENTER})` });
+      const hub = element("g", {
+        class: "hub",
+        transform: `translate(${CENTER},${CENTER})`,
+      });
       hub.append(element("circle", { r: 30 }));
-      hub.append(element("text", { y: -3, "text-anchor": "middle" }, "control"));
+      hub.append(
+        element("text", { y: -3, "text-anchor": "middle" }, "control"),
+      );
       hub.append(element("text", { y: 10, "text-anchor": "middle" }, "plane"));
 
       svg.replaceChildren(
