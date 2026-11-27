@@ -5,13 +5,14 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 )
 
 // How much of what happened the ledger keeps to show: the latest
-// events, and the latest boots and the latest asks, which the site's
-// charts are drawn from.
+// events, and the latest boots and the latest asks of each exposed
+// Service, which the site's charts are drawn from.
 const (
 	eventsKept = 60
 	bootsKept  = 240
@@ -254,8 +255,24 @@ func (l *ledger) asked(name string, took time.Duration, status int, now time.Tim
 	}
 	l.totals.AskedOf[name]++
 	l.asks = append(l.asks, Ask{At: now, App: name, Seconds: took.Seconds(), Status: status})
-	if len(l.asks) > asksKept {
-		l.asks = l.asks[len(l.asks)-asksKept:]
+
+	// The oldest ask of the same Service goes when the Service has
+	// more than are kept. Each Service has its own allowance: a page
+	// reads one Service every second while another gets a request when
+	// a visitor presses a button, and the first would leave the chart
+	// of the second empty.
+	kept, oldest := 0, -1
+	for index, ask := range l.asks {
+		if ask.App != name {
+			continue
+		}
+		kept++
+		if oldest < 0 {
+			oldest = index
+		}
+	}
+	if kept > asksKept {
+		l.asks = slices.Delete(l.asks, oldest, oldest+1)
 	}
 }
 

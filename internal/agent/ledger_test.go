@@ -133,7 +133,10 @@ func TestLedgerReadsTotalsAlone(t *testing.T) {
 
 // TestLedgerKeepsTheLatest checks that the feed, the boots and the
 // asks hold no more than they are meant to, and that what they hold is
-// the newest: by recording more of each than the ledger keeps.
+// the newest: by recording more of each than the ledger keeps. The
+// asks of one Service are kept apart from another's, so that a Service
+// a page reads every second does not push out the asks of one a
+// visitor sends a request to now and then.
 func TestLedgerKeepsTheLatest(t *testing.T) {
 	now := time.Unix(1000, 0)
 	book := newLedger(t.TempDir(), now)
@@ -145,12 +148,17 @@ func TestLedgerKeepsTheLatest(t *testing.T) {
 		book.asked("counter", time.Duration(index)*time.Second, http.StatusOK, now)
 	}
 
-	_, events, boots, asks := book.view()
-	if len(events) != eventsKept || len(boots) != bootsKept || len(asks) != asksKept {
-		t.Errorf("%d events, %d boots and %d asks kept", len(events), len(boots), len(asks))
+	for index := 0; index < asksKept+50; index++ {
+		book.asked("picture", time.Millisecond, http.StatusOK, now)
 	}
-	if last := asks[len(asks)-1].Seconds; last != float64(asksKept+49) {
-		t.Errorf("the newest ask kept is %v", last)
+
+	_, events, boots, asks := book.view()
+	counter := slices.DeleteFunc(slices.Clone(asks), func(ask Ask) bool { return ask.App != "counter" })
+	if len(events) != eventsKept || len(boots) != bootsKept || len(counter) != asksKept || len(asks) != 2*asksKept {
+		t.Fatalf("%d events, %d boots, %d asks of the counter and %d asks in all kept", len(events), len(boots), len(counter), len(asks))
+	}
+	if last := counter[len(counter)-1].Seconds; last != float64(asksKept+49) {
+		t.Errorf("the newest ask of the counter kept is %v", last)
 	}
 	if last := boots[len(boots)-1].Seconds; last != float64(bootsKept+49) {
 		t.Errorf("the newest boot kept is %v", last)
