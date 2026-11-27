@@ -41,13 +41,34 @@
   margin: 0 0 10px;
 }
 
-/* The devices, each with how many tiles the device rendered. */
+/* The devices, each with how many tiles the device rendered. Each is
+   a button that lights the device's tiles, and the one that was
+   pressed is marked. */
 #picture-devices {
   margin-top: 12px;
+  gap: 6px 8px;
 }
 
-#picture-devices .key {
+#picture-devices .device {
+  display: inline-flex;
+  align-items: center;
   gap: 5px;
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 3px 7px;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+#picture-devices .device:hover,
+#picture-devices .device[aria-pressed="true"] {
+  border-color: var(--accent);
+}
+
+#picture-devices .device[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 #picture-devices .times {

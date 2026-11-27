@@ -180,9 +180,9 @@
           <div class="panel" id="picture-panel" hidden>
             <h2>Render a picture</h2>
             <p class="small">
-              One picture, cut into tiles, and every tab's pod renders the tiles it is asked for: a
-              piece of the Mandelbrot set, worked out in awk on the Linux in the tab. Point at a
-              tile to see whose device rendered it.
+              Press the button and the cluster draws a Mandelbrot set. The picture is split into 64
+              tiles, and each node's pod computes its share in awk, on the Linux in its tab. Point
+              at a tile to see which device drew it.
             </p>
             <div class="picture">
               <div class="picture-frame">
@@ -191,8 +191,9 @@
               </div>
               <div class="picture-side">
                 <p><button class="button" id="paint">Render a picture</button></p>
+                <p class="small" id="picture-rule" hidden>One picture at a time, for everyone.</p>
                 <p class="small" id="picture-caption"></p>
-                <p class="small" id="picture-picked"></p>
+                <p class="small" id="picture-pointed"></p>
               </div>
             </div>
             <div class="legend" id="picture-devices"></div>

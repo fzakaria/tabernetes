@@ -53,7 +53,7 @@ const PALETTE = [
 const UNRENDERED = "rgba(237, 241, 255, 0.08)";
 
 // What lies over the tiles of other devices while one device's tiles
-// are shown, and the line around the tile under the pointer.
+// are lit, and the line around the tile under the pointer.
 const VEIL = "rgba(7, 11, 22, 0.78)";
 const MARK = "#ffb020";
 const MARK_WIDTH = 3;
@@ -73,11 +73,19 @@ const byId = (id) => document.getElementById(id);
 const picture = { number: 0, side: 0, tiles: [], rendering: false, seconds: 0, note: "" };
 let restUntil = 0;
 
-// What the visitor is pointing at: a device, and the tile when the
-// device was pointed at by one of its tiles. And whether every device
-// is listed, or only the first few.
-let pickedNode = null;
-let pickedTile = null;
+// The tile under the pointer, if any. Pointing at a tile outlines the
+// tile and names the device that rendered it, and changes nothing else
+// of the picture.
+let pointedTile = null;
+
+// The device whose tiles are lit while the others are shaded, which is
+// asked for in the list of devices and not on the picture: the device
+// under the pointer there, or else the device that was pressed, which
+// stays lit until it is pressed again.
+let hoveredNode = null;
+let pressedNode = null;
+
+// Whether every device is listed, or only the first few.
 let everyDevice = false;
 
 // What the painter said the last time the button was pressed and the
@@ -180,26 +188,37 @@ function drawAll() {
   picture.tiles.forEach(drawTile);
 }
 
-// Draw the veil: nothing when no device is picked, and otherwise a
-// shade over every tile that another device rendered, and a line
-// around the tile under the pointer.
+// The device whose tiles are lit, if any.
+function litNode() {
+  return hoveredNode ?? pressedNode;
+}
+
+// The tile as the painter gave it, or nothing for a tile that is not
+// rendered yet.
+function rendered(tile) {
+  return picture.tiles.find((one) => one.tile === tile);
+}
+
+// Draw what lies over the picture: a shade over every tile the lit
+// device did not render, when a device is lit, and a line around the
+// tile under the pointer.
 function drawVeil() {
   const context = byId("picture-veil").getContext("2d");
   context.clearRect(0, 0, CANVAS_PX, CANVAS_PX);
-  if (!pickedNode) {
-    return;
-  }
-  context.fillStyle = VEIL;
-  for (const { tile, node } of picture.tiles) {
-    if (node !== pickedNode) {
-      const [left, top, width] = place(tile);
-      context.fillRect(left, top, width, width);
+  const lit = litNode();
+  if (lit) {
+    context.fillStyle = VEIL;
+    for (const { tile, node } of picture.tiles) {
+      if (node !== lit) {
+        const [left, top, width] = place(tile);
+        context.fillRect(left, top, width, width);
+      }
     }
   }
-  if (pickedTile === null) {
+  if (pointedTile === null) {
     return;
   }
-  const [left, top, width] = place(pickedTile);
+  const [left, top, width] = place(pointedTile);
   context.strokeStyle = MARK;
   context.lineWidth = MARK_WIDTH;
   context.strokeRect(
@@ -239,25 +258,58 @@ function renderCaption() {
   byId("picture-caption").textContent = [text, picture.note, refusal].filter(Boolean).join(" ");
 }
 
-// Name the device whose tile is under the pointer.
-function renderPicked() {
-  const line = byId("picture-picked");
-  if (pickedTile === null || !pickedNode) {
+// Say what is pointed at: the device that rendered the tile under the
+// pointer, or else how much of the picture the lit device rendered.
+// Either way the device's name is a link to the node.
+function renderPointed() {
+  const line = byId("picture-pointed");
+  const tile = pointedTile === null ? undefined : rendered(pointedTile);
+  const lit = litNode();
+  if (tile) {
+    line.replaceChildren(`Tile ${tile.tile + 1} was drawn by `, nodeLink(tile.node), ".");
+  } else if (lit) {
+    const share = picture.tiles.filter(({ node }) => node === lit).length;
+    line.replaceChildren(nodeLink(lit), ` drew ${plural(share, "tile")}.`);
+  } else {
     line.replaceChildren();
-    return;
   }
-  line.replaceChildren(`Tile ${pickedTile + 1} was rendered by `, nodeLink(pickedNode), ".");
 }
 
-// List the devices under the picture. Pointing at one shows its tiles.
+// Mark the pressed device in the list, and show the lit device's
+// tiles.
+function renderLit() {
+  for (const key of byId("picture-devices").querySelectorAll("button.device")) {
+    key.setAttribute("aria-pressed", String(key.dataset.node === pressedNode));
+  }
+  drawVeil();
+  renderPointed();
+}
+
+// List the devices under the picture, each a button. Pointing at one
+// lights its tiles for as long as the pointer is there, and pressing
+// one keeps them lit until the same button is pressed again.
 function renderDevices() {
   const all = devices();
   const shown = everyDevice ? all : all.slice(0, DEVICES_NAMED);
   const keys = shown.map(([node, tiles]) => {
-    const key = make("span", "key");
-    key.append(nodeLink(node), make("span", "times", `×${tiles}`));
-    key.addEventListener("pointerenter", () => pick(node, null));
-    key.addEventListener("pointerleave", () => pick(null, null));
+    const key = make("button", "device");
+    key.dataset.node = node;
+    key.append(make("span", "mono", node), make("span", "times", `×${tiles}`));
+    key.addEventListener("pointerenter", (event) => {
+      // A finger has no hover: its touch is the press that follows.
+      if (event.pointerType === "mouse") {
+        hoveredNode = node;
+        renderLit();
+      }
+    });
+    key.addEventListener("pointerleave", () => {
+      hoveredNode = null;
+      renderLit();
+    });
+    key.addEventListener("click", () => {
+      pressedNode = pressedNode === node ? null : node;
+      renderLit();
+    });
     return key;
   });
 
@@ -271,13 +323,17 @@ function renderDevices() {
     keys.push(more);
   }
   byId("picture-devices").replaceChildren(...keys);
+  renderLit();
 }
 
-// Say on the button what pressing it would do now.
+// Say on the button what pressing it would do now, and under a button
+// that cannot be pressed, that the wait is everyone's: the painter
+// renders one picture at a time whoever asks.
 function renderButton() {
   const button = byId("paint");
   const rest = Math.ceil((restUntil - performance.now()) / MS_PER_SECOND);
   button.disabled = picture.rendering || rest > 0;
+  byId("picture-rule").hidden = !button.disabled;
   if (picture.rendering) {
     button.textContent = "Rendering…";
   } else if (rest > 0) {
@@ -287,28 +343,26 @@ function renderButton() {
   }
 }
 
-// Show one device's tiles, or every tile when no device is given.
-function pick(node, tile) {
-  if (node === pickedNode && tile === pickedTile) {
-    return;
-  }
-  pickedNode = node;
-  pickedTile = tile;
-  drawVeil();
-  renderPicked();
-}
-
-// Pick the device whose tile is under a pointer, or nothing when the
-// tile there is not rendered yet.
-function pickAt(event) {
+// Point at the tile under a pointer, or at nothing when the tile there
+// is not rendered yet.
+function pointAt(event) {
   if (picture.side === 0) {
     return;
   }
   const box = event.currentTarget.getBoundingClientRect();
   const column = Math.floor(((event.clientX - box.left) / box.width) * picture.side);
   const row = Math.floor(((event.clientY - box.top) / box.height) * picture.side);
-  const found = picture.tiles.find(({ tile }) => tile === row * picture.side + column);
-  pick(found ? found.node : null, found ? found.tile : null);
+  point(rendered(row * picture.side + column)?.tile ?? null);
+}
+
+// Point at a tile, or at none.
+function point(tile) {
+  if (tile === pointedTile) {
+    return;
+  }
+  pointedTile = tile;
+  drawVeil();
+  renderPointed();
 }
 
 // Take what the painter said of the picture: the tiles the page did
@@ -319,8 +373,9 @@ function take(answer) {
     // Another picture, or the same one from its first tile: nothing
     // the page has drawn or picked is of this picture.
     picture.tiles = [];
-    pickedNode = null;
-    pickedTile = null;
+    pointedTile = null;
+    hoveredNode = null;
+    pressedNode = null;
     everyDevice = false;
   }
   picture.number = answer.number;
@@ -341,8 +396,6 @@ function take(answer) {
     drawAll();
   }
   if (!same || answer.tiles.length > 0) {
-    drawVeil();
-    renderPicked();
     renderDevices();
   }
   renderCaption();
@@ -415,14 +468,14 @@ function start() {
     byId(id).height = CANVAS_PX;
   }
 
-  // A mouse picks the tile it is over and lets go when it leaves. A
-  // finger picks the tile it touches, which stays picked.
+  // A mouse points at the tile it is over and lets go when it leaves.
+  // A finger points at the tile it touches, which stays pointed at.
   const canvas = byId("picture");
-  canvas.addEventListener("pointermove", pickAt);
-  canvas.addEventListener("pointerdown", pickAt);
+  canvas.addEventListener("pointermove", pointAt);
+  canvas.addEventListener("pointerdown", pointAt);
   canvas.addEventListener("pointerleave", (event) => {
     if (event.pointerType === "mouse") {
-      pick(null, null);
+      point(null);
     }
   });
 
