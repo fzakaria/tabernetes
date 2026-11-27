@@ -53,6 +53,8 @@ const podsElement = document.getElementById("pods");
 const clusterElement = document.getElementById("cluster");
 const leaveButton = document.getElementById("leave");
 const rejoinButton = document.getElementById("rejoin");
+const explainElement = document.getElementById("explain");
+const watchElement = document.getElementById("watch");
 
 // The socket while the tab is a node, the containers shown by id, the
 // state the status line shows, and the lock that keeps the screen on.
@@ -72,6 +74,7 @@ function show(next, text) {
   state = next;
   statusElement.dataset.state = next;
   statusElement.textContent = text;
+  explainElement.hidden = next !== State.RUNNING;
   leaveButton.hidden = next !== State.IDLE && next !== State.RUNNING;
   rejoinButton.hidden = next !== State.LEFT && next !== State.REFUSED;
 }
@@ -255,6 +258,7 @@ async function join() {
       case FromAgent.JOINED:
         retryDelay = RETRY_FIRST_MS;
         nameElement.textContent = message.node;
+        watchElement.href = `/#node=${encodeURIComponent(message.node)}`;
         document.title = `${message.node} · tabernetes`;
         show(State.IDLE, "Ready. Waiting for the scheduler to send a pod.");
         stayAwake();

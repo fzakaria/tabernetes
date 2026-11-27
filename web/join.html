@@ -19,6 +19,12 @@
 
       <p class="node-name mono" id="name">joining</p>
       <p class="status" id="status" data-state="joining">Asking the cluster for a place.</p>
+      <p class="small" id="explain" hidden>
+        Kubernetes scheduled the pod below to this tab. Its program is running on this device, on a
+        Linux kernel booted in the tab; the pod's files and its address in the cluster stay on the
+        cluster's machine. Close the tab and the pod is started on someone else's.
+        <a id="watch" href="/">See this node on the cluster's page.</a>
+      </p>
 
       <section class="pods" id="pods"></section>
 
