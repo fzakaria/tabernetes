@@ -10,6 +10,10 @@
 # `--expose counter=default/web:8000`, the site's "Ask the cluster"
 # button sends its visitors' requests here.
 #
+# The web server also renders tiles of a picture, one for each request
+# that names one. examples/picture.yaml has the painter that asks every
+# tab for tiles and puts the picture together.
+#
 # The web server is a DaemonSet, so every tab that joins gets one and
 # is behind the Service a few seconds later. It is a shell script: the
 # image is Alpine's 4 MB and nothing is installed, which matters when
@@ -164,6 +168,36 @@ spec:
                 exit
               fi
 
+              # A tile of a picture, which is no visit either. The path
+              # is /tile/<picture>/<tiles to a side>/<tile>, and each
+              # of the three is a number.
+              number() {
+                case "$1" in
+                "" | *[!0-9]* | 0?* | ???????*) return 1 ;;
+                esac
+              }
+              if [ "${path#/tile/}" != "$path" ]; then
+                # The path's parts, the first of which is the nothing
+                # before the first slash.
+                parts=$IFS
+                IFS=/
+                set -f
+                set -- $path
+                set +f
+                IFS=$parts
+                picture=$3
+                side=$4
+                tile=$5
+                if [ $# -eq 5 ] && number "$picture" && number "$side" && number "$tile" &&
+                  pixels=$(awk -v picture="$picture" -v side="$side" -v tile="$tile" -f /tile.awk); then
+                  reply "200 OK" application/json "{\"node\": \"$NODE_NAME\", \"pixels\": \"$pixels\"}"
+                  echo "tile $((tile + 1)) of $((side * side)) in picture $picture was rendered here, on $NODE_NAME" >&2
+                else
+                  reply "404 Not Found" text/plain "no such tile"
+                fi
+                exit
+              fi
+
               visit=$(printf 'INCR visits\r\nQUIT\r\n' | nc -w 5 redis 6379 | head -n 1 | tr -dc 0-9)
               if [ -z "$visit" ]; then
                 reply "503 Service Unavailable" text/plain "Redis did not answer"
@@ -180,11 +214,75 @@ spec:
               ANSWER
               chmod +x /answer
 
+              # What renders one tile: the part of a picture of the
+              # Mandelbrot set that the tile covers, as two hex digits
+              # for each pixel, row after row. The digits are how many
+              # turns the pixel's point took to leave, or ff for a point
+              # that stayed.
+              #
+              # The request names the picture, how many tiles the
+              # picture has to a side, and the tile. How many pixels a
+              # tile has and how many turns a point is given are fixed
+              # here, since they are what a tile costs and the
+              # processor is the phone's: about a second for the
+              # dearest tile.
+              cat > /tile.awk <<'TILE'
+              BEGIN {
+                PIXELS = 12
+                TURNS = 64
+                SIDE_MOST = 16
+                STAYED = "ff"
+
+                # The pictures, each as the x and the y of the centre
+                # and the width. A picture's number picks one, going
+                # round the list.
+                pictures = split("-0.65 0 2.7;-0.16 1.03 0.25;-0.1 0.75 0.8;-1.76 0 0.12", places, ";")
+                if (side < 1 || side > SIDE_MOST || tile < 0 || tile >= side * side) {
+                  exit 1
+                }
+                split(places[picture % pictures + 1], place, " ")
+
+                # The tile's top left corner, and the width of a pixel.
+                step = place[3] / (side * PIXELS)
+                left = place[1] - place[3] / 2 + (tile % side) * PIXELS * step
+                top = place[2] - place[3] / 2 + int(tile / side) * PIXELS * step
+
+                for (row = 0; row < PIXELS; row++) {
+                  for (column = 0; column < PIXELS; column++) {
+                    a = left + (column + 0.5) * step
+                    b = top + (row + 0.5) * step
+
+                    # A point in the heart or in the disc to the left
+                    # of the heart stays, and a formula for each shape
+                    # tells without turning the point TURNS times.
+                    q = (a - 0.25) * (a - 0.25) + b * b
+                    if (q * (q + a - 0.25) <= 0.25 * b * b || (a + 1) * (a + 1) + b * b <= 0.0625) {
+                      pixels = pixels STAYED
+                      continue
+                    }
+
+                    x = 0
+                    y = 0
+                    turns = 0
+                    while (turns < TURNS && x * x + y * y < 4) {
+                      next_x = x * x - y * y + a
+                      y = 2 * x * y + b
+                      x = next_x
+                      turns++
+                    }
+                    pixels = pixels (turns < TURNS ? sprintf("%02x", turns) : STAYED)
+                  }
+                }
+                print pixels
+              }
+              TILE
+
               echo "Linux $(uname -r) on $(uname -m), booted in the tab that is node $NODE_NAME."
               echo "This pod is a web server behind the cluster's Service \"web\"."
               echo "When someone presses \"Send a request\" on the cluster's page and the"
-              echo "Service picks this pod, the request is answered on this device, and a"
-              echo "line below says so."
+              echo "Service picks this pod, the request is answered on this device. When"
+              echo "someone presses \"Render a picture\", this device renders some of the"
+              echo "picture's tiles. Each request and each tile adds a line below."
               echo
               exec nc -lk -p 8000 -e /answer
 ---
