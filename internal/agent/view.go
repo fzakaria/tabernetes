@@ -46,10 +46,20 @@ type NodeView struct {
 	Browser  string `json:"browser"`
 	Model    string `json:"model"`
 	// Zone is the tab's time zone, which is how the site's map places
-	// the node.
-	Zone    string    `json:"zone"`
-	Threads int       `json:"threads"`
-	Joined  time.Time `json:"joined"`
+	// a node whose address the agent's database does not know.
+	Zone string `json:"zone"`
+	// Placed is whether the database knows roughly where the node's
+	// address is. City, Country, Latitude and Longitude are where: a
+	// city's name, a country's two-letter code, and coordinates
+	// rounded to about ten kilometres. The address itself is never in
+	// the description.
+	Placed    bool      `json:"placed"`
+	City      string    `json:"city,omitempty"`
+	Country   string    `json:"country,omitempty"`
+	Latitude  float64   `json:"latitude,omitempty"`
+	Longitude float64   `json:"longitude,omitempty"`
+	Threads   int       `json:"threads"`
+	Joined    time.Time `json:"joined"`
 	// Resident is whether the node is a browser the cluster's own
 	// machine keeps open, and not a visitor's.
 	Resident bool      `json:"resident"`
@@ -139,15 +149,20 @@ func (a *Agent) Snapshot() View {
 			continue
 		}
 		entry := NodeView{
-			Name:     node.Name,
-			Platform: tab.LabelValue(node.Hello.Platform),
-			Browser:  tab.LabelValue(node.Hello.Browser),
-			Model:    tab.LabelValue(node.Hello.Model),
-			Zone:     node.Hello.PlainZone(),
-			Threads:  node.Hello.PlainThreads(),
-			Joined:   node.Joined,
-			Resident: node.Origin == tab.Resident,
-			Pods:     []PodView{},
+			Name:      node.Name,
+			Platform:  tab.LabelValue(node.Hello.Platform),
+			Browser:   tab.LabelValue(node.Hello.Browser),
+			Model:     tab.LabelValue(node.Hello.Model),
+			Zone:      node.Hello.PlainZone(),
+			Placed:    node.Placed,
+			City:      node.Place.City,
+			Country:   node.Place.Country,
+			Latitude:  node.Place.Latitude,
+			Longitude: node.Place.Longitude,
+			Threads:   node.Hello.PlainThreads(),
+			Joined:    node.Joined,
+			Resident:  node.Origin == tab.Resident,
+			Pods:      []PodView{},
 		}
 		for _, running := range a.runs {
 			if running.node != node {

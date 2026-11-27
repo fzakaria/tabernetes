@@ -22,6 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
+	"github.com/fzakaria/tabernetes/internal/geo"
 	"github.com/fzakaria/tabernetes/internal/kube"
 	"github.com/fzakaria/tabernetes/internal/machine"
 	"github.com/fzakaria/tabernetes/internal/runtime"
@@ -104,6 +105,10 @@ type Config struct {
 	// StartsAtOnce is how many pods may be at the machine's part of
 	// starting at once: the sandbox, and tabc. Zero means any number.
 	StartsAtOnce int
+	// Places says roughly where a visitor's address is, for the site's
+	// map. Nil means nobody is looked up, and the map goes by each
+	// browser's time zone.
+	Places *geo.Book
 	// ResidentWord is the word a resident's page says (tab.Hello). A
 	// tab that says it is a resident: not held to an address's limit,
 	// and the first to go when the cluster is full. Empty means the
@@ -200,6 +205,10 @@ type Node struct {
 	// Origin is whose browser the tab is in: a visitor's, or the
 	// cluster's own machine's.
 	Origin tab.Origin
+	// Place is roughly where the tab's address is, and Placed whether
+	// that is known.
+	Place  geo.Place
+	Placed bool
 
 	// outbox is what the agent has to tell the tab's page.
 	outbox chan Message
@@ -535,6 +544,9 @@ func (a *Agent) Join(ctx context.Context, hello tab.Hello, address string) (*Nod
 		Origin:  origin,
 		outbox:  make(chan Message, outboxSize),
 		lost:    make(chan struct{}),
+	}
+	if origin == tab.Visitor {
+		node.Place, node.Placed = a.config.Places.Lookup(address)
 	}
 
 	// The place is held under a name nothing else has, until the node's
