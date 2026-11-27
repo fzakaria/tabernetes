@@ -145,6 +145,7 @@ func (a *Agent) Handler(site Site) (http.Handler, error) {
 	})
 	mux.Handle("GET "+pathStatic, site.Share)
 	mux.HandleFunc(pathApps, a.serveApp)
+	mux.HandleFunc(pathNodeApps, a.serveNodeApp)
 	mux.HandleFunc(containerPrefix, func(w http.ResponseWriter, r *http.Request) {
 		a.serveContainer(w, r, site.Share)
 	})

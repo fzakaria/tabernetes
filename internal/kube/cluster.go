@@ -198,6 +198,10 @@ type Service struct {
 	ClusterIP string
 	// Ports are the ports the Service listens on.
 	Ports []int32
+	// Targets are the ports the Service's pods listen on, by the
+	// Service's port each stands behind. A port whose target the
+	// Service gives by name is zero here.
+	Targets map[int32]int32
 	// Selector is the labels a pod has to carry to be behind the
 	// Service. A Service without one selects nothing.
 	Selector map[string]string
@@ -215,14 +219,17 @@ func (c *Cluster) Services(ctx context.Context) ([]Service, error) {
 			continue
 		}
 		ports := make([]int32, 0, len(item.Spec.Ports))
+		targets := make(map[int32]int32, len(item.Spec.Ports))
 		for _, port := range item.Spec.Ports {
 			ports = append(ports, port.Port)
+			targets[port.Port] = int32(port.TargetPort.IntValue())
 		}
 		services = append(services, Service{
 			Namespace: item.Namespace,
 			Name:      item.Name,
 			ClusterIP: item.Spec.ClusterIP,
 			Ports:     ports,
+			Targets:   targets,
 			Selector:  item.Spec.Selector,
 		})
 	}
