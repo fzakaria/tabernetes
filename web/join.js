@@ -30,6 +30,12 @@ const State = Object.freeze({
   UNSUPPORTED: "unsupported",
 });
 
+// The word a resident's page is given, after this name in the part of
+// its address a browser keeps to itself. A resident is a browser the
+// cluster's own machine keeps open; a visitor's address has no word.
+const RESIDENT_KEY = "resident";
+const residentWord = new URLSearchParams(location.hash.slice(1)).get(RESIDENT_KEY) ?? "";
+
 // How long after the tab comes back into view a tab that lost its place
 // asks for one again.
 const REJOIN_DELAY_MS = 500;
@@ -91,6 +97,7 @@ async function describe() {
     // The time zone, which is how the site's map places the node: at
     // the zone's city, and no nearer.
     zone: Intl.DateTimeFormat().resolvedOptions().timeZone ?? "",
+    resident: residentWord,
   };
   const agent = navigator.userAgent;
 
@@ -254,6 +261,13 @@ async function join() {
         break;
       case FromAgent.REFUSED:
         nameElement.textContent = "not a node";
+        if (message.retry || residentWord) {
+          // Turned away for now: the machine is busy, or this is a
+          // resident, which waits for room however long that takes.
+          // The socket's closing asks again.
+          show(State.LEFT, message.reason);
+          break;
+        }
         show(State.REFUSED, message.reason);
         break;
       case FromAgent.RUN:
@@ -282,9 +296,12 @@ async function join() {
       return;
     }
 
-    // The place was lost, not given up: ask for one again, later each
-    // time the asking fails.
-    show(State.LEFT, "This tab lost its place in the cluster, and is asking for one again.");
+    // The place was lost, not given up, or the tab was asked to wait
+    // for one: ask again, later each time the asking fails. What a tab
+    // that was asked to wait was told stays on the page.
+    if (state !== State.LEFT) {
+      show(State.LEFT, "This tab lost its place in the cluster, and is asking for one again.");
+    }
     retryTimer = setTimeout(join, retryDelay);
     retryDelay = Math.min(retryDelay * 2, RETRY_MOST_MS);
   });
