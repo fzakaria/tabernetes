@@ -3,8 +3,11 @@ package agent
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
+	"io"
 	"io/fs"
 	"mime"
 	"net/http"
@@ -38,10 +41,31 @@ type Share struct {
 	version string
 
 	// compressed holds each file gzipped, from the first request for
-	// it.
+	// it, and mirror the address of each file a mirror was seen to
+	// serve byte for byte.
 	mu         sync.Mutex
 	compressed map[string][]byte
+	mirror     map[string]string
 }
+
+// mirrored are the shared files a mirror may serve in the agent's
+// place, as a container's page names them, each with its name on the
+// mirror. The kernel alone: the kernel is nine tenths of what a tab
+// downloads, and a page may fetch a kernel from anywhere, which is not
+// so of the scripts beside it (a worker's script has to come from the
+// page's own origin).
+var mirrored = map[string]string{KernelFile: "unkernel.wasm"}
+
+// KernelFile is the kernel a one-CPU guest boots, as a container's
+// page names it.
+const KernelFile = "unkernel/unkernel.wasm"
+
+// versionFile is the file of the share that names unkernel's version,
+// and versionBlank where a mirror's address has that version put in.
+const (
+	versionFile  = "unkernel/VERSION"
+	versionBlank = "{version}"
+)
 
 // OpenShare returns the files under a directory, which is tabc's share:
 // the directory tabc's own build embeds.
@@ -66,7 +90,71 @@ func OpenShare(dir string) (*Share, error) {
 		}
 	}
 	version := hex.EncodeToString(hash.Sum(nil))[:versionLength]
-	return &Share{dir: dir, version: version, compressed: map[string][]byte{}}, nil
+	return &Share{dir: dir, version: version, compressed: map[string][]byte{}, mirror: map[string]string{}}, nil
+}
+
+// UseMirror sends tabs to a mirror for the files a mirror may serve,
+// once the mirror has been seen to serve the share's own bytes. `base`
+// is the address of a directory that holds unkernel's published files,
+// with {version} where unkernel's version goes. A mirror that cannot
+// be reached, or serves other bytes, is an error, and tabs keep
+// getting the agent's own files.
+func (s *Share) UseMirror(ctx context.Context, client *http.Client, base string) error {
+	version, err := os.ReadFile(filepath.Join(s.dir, filepath.FromSlash(versionFile)))
+	if err != nil {
+		return err
+	}
+	base = strings.TrimRight(strings.ReplaceAll(base, versionBlank, strings.TrimSpace(string(version))), "/")
+
+	for name, remote := range mirrored {
+		// The share's own file, as a hash.
+		own, err := os.ReadFile(filepath.Join(s.dir, filepath.FromSlash(name)))
+		if err != nil {
+			return err
+		}
+		want := sha256.Sum256(own)
+
+		// The mirror's, as a hash.
+		address := base + "/" + remote
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+		if err != nil {
+			return err
+		}
+		response, err := client.Do(request)
+		if err != nil {
+			return err
+		}
+		got := sha256.New()
+		_, err = io.Copy(got, response.Body)
+		response.Body.Close()
+		if err != nil {
+			return fmt.Errorf("%s: %w", address, err)
+		}
+		if response.StatusCode != http.StatusOK {
+			return fmt.Errorf("%s: %s", address, response.Status)
+		}
+		if !bytes.Equal(got.Sum(nil), want[:]) {
+			return fmt.Errorf("%s is not the share's %s", address, name)
+		}
+
+		s.mu.Lock()
+		s.mirror[name] = address
+		s.mu.Unlock()
+	}
+	return nil
+}
+
+// Location returns where a tab is sent for a shared file, named as a
+// container's page names it: the mirror, for a file the mirror was seen
+// to serve, and the agent's own address for every other.
+func (s *Share) Location(name string) string {
+	s.mu.Lock()
+	address, has := s.mirror[name]
+	s.mu.Unlock()
+	if has {
+		return address
+	}
+	return s.Path(name)
 }
 
 // Path returns the address of a shared file, named as a container's
