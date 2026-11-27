@@ -23,6 +23,19 @@ BUNDLE=/opt/tabernetes
 MAX_NODES=${MAX_NODES:-100}
 MAX_NODES_PER_ADDRESS=${MAX_NODES_PER_ADDRESS:-4}
 
+# Where the machine is, for the site's map, as a time zone's name. The
+# machine's own clock is on UTC, which is nowhere.
+ZONE=${ZONE:-America/Los_Angeles}
+
+# The demo: the counter and a pod for every tab (examples/), and the
+# counter's web Service open to the site's visitors. DEMO=no leaves the
+# cluster empty.
+DEMO=${DEMO:-yes}
+EXPOSE=
+if [ "$DEMO" = yes ]; then
+  EXPOSE=counter=default/web:8000
+fi
+
 # The pod network: one bridge for every pod, the cluster's own and the
 # tabs'. k3s reads the system's CNI directories once its own network is
 # switched off, and brings the plugins itself.
@@ -55,12 +68,17 @@ until k3s kubectl get --raw /readyz >/dev/null 2>&1; do
   sleep 1
 done
 k3s kubectl apply -f "$BUNDLE/deploy/manifests/runtimeclass.yaml"
+if [ "$DEMO" = yes ]; then
+  k3s kubectl apply -f "$BUNDLE/examples/counter.yaml" -f "$BUNDLE/examples/everywhere.yaml"
+fi
 
 # The agent.
 cat > /etc/tabernetes/env <<ENV
 PUBLIC_URL=$PUBLIC_URL
 MAX_NODES=$MAX_NODES
 MAX_NODES_PER_ADDRESS=$MAX_NODES_PER_ADDRESS
+ZONE=$ZONE
+EXPOSE=$EXPOSE
 ENV
 cp "$BUNDLE/deploy/tabernetes.service" /etc/systemd/system/tabernetes.service
 systemctl daemon-reload

@@ -1,25 +1,26 @@
-# A pod for every tab there is room for: a load test, and a way to give
-# every phone in a room something to show. Scale it to the number of
-# nodes:
+# A pod for every tab there is room for, so that every phone in a room
+# has something to show. The Deployment asks for as many pods as the
+# cluster takes nodes; the ones with no tab to run in wait as Pending,
+# and each tab that joins takes one.
 #
-#   kubectl scale deployment load --replicas=40
+#   kubectl apply -f everywhere.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: load
+  name: everywhere
 spec:
-  replicas: 1
+  replicas: 100
   selector:
     matchLabels:
-      app: load
+      app: everywhere
   template:
     metadata:
       labels:
-        app: load
+        app: everywhere
     spec:
       runtimeClassName: tab
       containers:
-        - name: load
+        - name: everywhere
           image: alpine:3.22
           env:
             - name: NODE_NAME

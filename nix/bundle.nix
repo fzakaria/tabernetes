@@ -1,6 +1,7 @@
 # Everything the cluster's machine needs, as one directory to copy
 # over: the agent, tabc, the files of tabc's every container's page
-# loads, and the deployment's own files.
+# loads, the deployment's own files, and the examples the deployment
+# runs as its demo.
 #
 # tabc comes from its release build, which is the binary that knows no
 # paths of the machine that built it. The share is the same build's, so
@@ -25,6 +26,7 @@ pkgs.runCommand "tabernetes-bundle-${tabernetes.version}" { } ''
   # the machine does not have.
   cp -rL ${tabcShare} $out/share
   cp -r ${../deploy} $out/deploy
+  cp -r ${../examples} $out/examples
   chmod -R u+w $out
   chmod +x $out/deploy/*.sh
 ''
