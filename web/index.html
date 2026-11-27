@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>tabernetes: a Kubernetes cluster whose nodes are browser tabs</title>
+    <meta
+      name="description"
+      content="A Kubernetes cluster whose nodes are browser tabs. Open a page and your phone is a node."
+    />
+    <link rel="icon" href="mark.svg" />
+    <link rel="stylesheet" href="site.css" />
+  </head>
+  <body>
+    <main>
+      <header class="brand"><img src="mark.svg" alt="" /> tabernetes</header>
+
+      <h1>A Kubernetes cluster whose nodes are browser tabs</h1>
+      <p class="lede">
+        Open the page and your phone is a node. The scheduler sends it a pod, and the pod's program
+        runs on a Linux kernel booted in the tab. Close the tab and the node is gone, and Kubernetes
+        starts the pod on someone else's.
+      </p>
+
+      <section class="panel invite">
+        <img src="qr.png" alt="A QR code for the page that makes a browser a node" />
+        <div class="words">
+          <p><b>Scan to become a node</b>, or use the browser you are reading this in.</p>
+          <p><a class="button" href="join">Join the cluster</a></p>
+          <p style="color: var(--muted); font-size: 13px">
+            Joining downloads about 5 MB and runs a small Linux guest in the tab, on one core, until
+            you close the tab.
+          </p>
+        </div>
+      </section>
+
+      <section class="counts">
+        <div class="panel">
+          <div class="number" id="count-nodes">0</div>
+          <div class="label">nodes now</div>
+        </div>
+        <div class="panel">
+          <div class="number" id="count-pods">0</div>
+          <div class="label">pods on them</div>
+        </div>
+        <div class="panel">
+          <div class="number" id="count-peak">0</div>
+          <div class="label">most nodes at once</div>
+        </div>
+        <div class="panel">
+          <div class="number" id="count-room">0</div>
+          <div class="label">places left</div>
+        </div>
+      </section>
+
+      <h2>The nodes</h2>
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Node</th>
+              <th>Device</th>
+              <th>Browser</th>
+              <th>Pod</th>
+              <th>Age</th>
+            </tr>
+          </thead>
+          <tbody id="nodes"></tbody>
+        </table>
+      </div>
+      <p class="empty" id="empty">No tab is a node right now. Yours can be the first.</p>
+
+      <h2>How it works</h2>
+      <p>
+        The control plane is an ordinary Kubernetes on one small machine. Beside it runs an agent
+        that plays kubelet for every tab at once. A tab that opens the join page gets a Node. When
+        the scheduler binds a pod to that Node, the agent starts the pod's container with
+        <a href="https://github.com/fzakaria/tabc">tabc</a>, a container runtime that runs each
+        container in a browser tab, and the tab loads the container's page.
+      </p>
+      <p>
+        The tab supplies the CPU and the memory. The container's files and its network stay on the
+        machine: every connection the program makes leaves from the pod's own address there, so a
+        Service reaches a pod on a phone like any other pod.
+      </p>
+      <pre>
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hello
+spec:
+  runtimeClassName: tab
+  containers:
+    - name: hello
+      image: alpine
+      command: ["sh", "-c", "echo hello from $(uname -m) in a tab; sleep 3600"]</pre>
+      <p>
+        The source is at
+        <a href="https://github.com/fzakaria/tabernetes">github.com/fzakaria/tabernetes</a>.
+      </p>
+    </main>
+    <script type="module" src="site.js"></script>
+  </body>
+</html>
