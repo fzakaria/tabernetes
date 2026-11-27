@@ -9,9 +9,9 @@
 set -eu
 number=$1
 
-# The time zones seeds are started in, in order. A fifth seed starts
-# again at the first.
-ZONES="Europe/Lisbon Asia/Tokyo America/Sao_Paulo Africa/Lagos Australia/Sydney Asia/Kolkata Europe/Berlin America/Toronto"
+# The time zones seeds are started in, in order. A seed past the end
+# of the list starts again at the first.
+ZONES="Europe/Lisbon Asia/Tokyo America/Sao_Paulo Africa/Lagos Australia/Sydney Asia/Kolkata Europe/Berlin America/Toronto America/Mexico_City Africa/Johannesburg Europe/London America/New_York Asia/Singapore America/Bogota Europe/Istanbul America/Chicago"
 
 # The zone at this seed's place in the list.
 count=$(echo "$ZONES" | wc -w)
