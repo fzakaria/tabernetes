@@ -43,6 +43,12 @@ const CROWD_SIZES = [18, 15, 12, 10, 8, 6, 5, 4, 3];
 // apart, in radians, so that their names do not sit on each other.
 const SERVICE_APART = 0.9;
 
+// How strongly a Service's lines to its pods are drawn: this much for
+// a few, and fainter the more there are, so that a Service in front of
+// every node is a haze and not a blot.
+const LINK_OPACITY = 0.55;
+const LINKS_AT_FULL_OPACITY = 8;
+
 // The colours workloads are given, in the order their names sort, and
 // the colour of a node that has no pod.
 const PALETTE = [
@@ -220,6 +226,12 @@ export function createTopology(svg) {
           lines.push(`${each.name}${each.running ? "" : ", starting"}`);
         }
         group.append(element("title", {}, lines.join("\n")));
+
+        // Pressing a node shows it: the page reads the node's name
+        // from its address.
+        group.addEventListener("click", () => {
+          location.hash = `node=${encodeURIComponent(node.name)}`;
+        });
         layers.nodes.append(group);
 
         if (!crowded) {
@@ -284,9 +296,13 @@ export function createTopology(svg) {
         layers.links.append(
           element("line", { x1: CENTER, y1: CENTER, x2: x, y2: y, stroke: color, class: "trunk" }),
         );
+        const opacity = Math.min(
+          LINK_OPACITY,
+          (LINK_OPACITY * LINKS_AT_FULL_OPACITY) / targets.length,
+        );
         for (const place of targets) {
           layers.links.append(
-            element("line", { x1: x, y1: y, x2: place.x, y2: place.y, stroke: color }),
+            element("line", { x1: x, y1: y, x2: place.x, y2: place.y, stroke: color, opacity }),
           );
         }
         const group = element("g", { class: "service", transform: `translate(${x},${y})` });

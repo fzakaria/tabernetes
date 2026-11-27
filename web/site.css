@@ -325,6 +325,44 @@ main > h2 {
   white-space: nowrap;
 }
 
+/* A mark after a line that has more to say: pointing at the mark, or
+   touching it, shows what. */
+.tile .sub:has(.more) {
+  overflow: visible;
+}
+
+.more {
+  position: relative;
+  cursor: default;
+  padding: 0 3px;
+  border-radius: 4px;
+  outline: none;
+}
+
+.more:hover,
+.more:focus {
+  background: var(--line);
+}
+
+.more:hover::after,
+.more:focus::after {
+  content: attr(data-tip);
+  position: absolute;
+  z-index: 2;
+  top: calc(100% + 6px);
+  left: -8px;
+  width: min(300px, 70vw);
+  white-space: normal;
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+
 /* Panels side by side. */
 .pair {
   display: grid;
@@ -360,7 +398,6 @@ main > h2 {
 
 #topology .links line {
   stroke-width: 1.4;
-  opacity: 0.55;
 }
 
 #topology .links line.trunk {
@@ -615,6 +652,33 @@ table {
 .scroll.tall {
   max-height: 440px;
   overflow-y: auto;
+  padding-top: 0;
+}
+
+/* The row of the node that was picked. */
+tr.lit td {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+/* A node's name where it is a link to the node, and a button that
+   reads as a link. */
+a.node-link {
+  color: inherit;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+
+button.linklike {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+#topology .nodes g {
+  cursor: pointer;
 }
 
 .scroll.tall th {

@@ -69,6 +69,14 @@ const byId = (id) => document.getElementById(id);
 // names itself.
 const OWN_BROWSER = "HeadlessChrome";
 
+// How many of a Service's nodes are named before the rest are counted,
+// and the mark after a line that has more to say to whoever points at
+// it.
+const SERVICE_NODES_NAMED = 3;
+const MORE_MARK = "…";
+
+const BYTES_PER_GB = 1e9;
+
 // The parts of a line of YAML: a comment, and a key with what follows
 // its colon.
 const YAML_COMMENT = /^(\s*)(#.*)$/;
@@ -93,6 +101,14 @@ const SHOW_TRIES = 5;
 let showFirst = null;
 let showTriesLeft = 0;
 
+// What starts the id of a node's row in the table of nodes, the
+// Services whose every node is listed, and whether the page is to
+// scroll to the row of the node it shows next: so for a link pressed
+// in the page, and not for the address the page was opened with.
+const ROW_PREFIX = "node-row-";
+const openServices = new Set();
+let scrollToRow = false;
+
 // Take the node to show from the page's address.
 function readAddress() {
   showFirst = new URLSearchParams(location.hash.slice(1)).get(NODE_KEY);
@@ -109,6 +125,24 @@ function make(tag, className, text) {
     element.textContent = text;
   }
   return element;
+}
+
+// A node's name as a link that shows the node: on the globe, and in
+// the table of nodes, where the page scrolls to it.
+function nodeLink(name) {
+  const link = make("a", "node-link mono", name);
+  link.href = `#${NODE_KEY}=${encodeURIComponent(name)}`;
+  return link;
+}
+
+// A line of text with a node's name in it, as the parts of the line
+// with the name made a link.
+function withNode(text, name) {
+  if (!name || !text.includes(name)) {
+    return [text];
+  }
+  const [before, ...after] = text.split(name);
+  return [before, nodeLink(name), after.join(name)];
 }
 
 // A pod's name without the namespace everything is in by default.
@@ -133,13 +167,22 @@ function renderTiles(view) {
   const starting = pods.length - running;
   tile("nodes", view.nodes.length, `room for ${count(view.room)} more`);
 
-  // How many of the nodes are the cluster's own, for whoever holds the
-  // pointer over the number.
+  // Why that much room, and how many of the nodes are the cluster's
+  // own, for whoever points at the mark after the line.
   const own = view.nodes.filter((node) => node.browser === OWN_BROWSER).length;
-  byId("tile-nodes-sub").title =
+  const spare = (view.machine.memoryAvailable / BYTES_PER_GB).toFixed(1);
+  const why = [
+    view.machine.memoryTotal > 0
+      ? `The cluster takes nodes until its machine has less than 1 GB of memory to spare. Each node costs the machine about 10 MB, and ${spare} GB is spare now.`
+      : "The cluster takes a set number of nodes.",
     own > 0
       ? `${own} of the nodes are headless browsers the cluster keeps open itself, so that it is never empty.`
-      : "";
+      : "",
+  ];
+  const more = make("span", "more", MORE_MARK);
+  more.tabIndex = 0;
+  more.dataset.tip = why.filter(Boolean).join(" ");
+  byId("tile-nodes-sub").append(" ", more);
   tile(
     "pods",
     running,
@@ -212,7 +255,9 @@ function renderEvents(view) {
   byId("events").replaceChildren(
     ...shown.map((event) => {
       const item = make("li", `event ${event.kind}`);
-      item.append(make("span", "what", eventText(event)));
+      const what = make("span", "what");
+      what.append(...withNode(eventText(event), event.node));
+      item.append(what);
       item.append(make("span", "when", `${duration(since(view, event.at))} ago`));
       return item;
     }),
@@ -445,13 +490,32 @@ function renderServices(view) {
       );
       item.append(what);
       const nodes = service.pods.map((pod) => nodeOf.get(pod)).filter(Boolean);
-      item.append(
-        make(
-          "span",
-          "when",
-          `${nodes.length} pod${nodes.length === 1 ? "" : "s"}: ${nodes.join(", ")}`,
-        ),
-      );
+      // The first few nodes by name, and the rest behind a count that
+      // opens when it is pressed.
+      const open = openServices.has(service.name);
+      const named = open ? nodes : nodes.slice(0, SERVICE_NODES_NAMED);
+      const list = make("span", "when", `${nodes.length} pod${nodes.length === 1 ? "" : "s"}: `);
+      for (const [index, name] of named.entries()) {
+        list.append(index > 0 ? ", " : "", nodeLink(name));
+      }
+      if (nodes.length > SERVICE_NODES_NAMED) {
+        const toggle = make(
+          "button",
+          "linklike",
+          open ? "show fewer" : `${nodes.length - SERVICE_NODES_NAMED} more${MORE_MARK}`,
+        );
+        toggle.type = "button";
+        toggle.addEventListener("click", () => {
+          if (open) {
+            openServices.delete(service.name);
+          } else {
+            openServices.add(service.name);
+          }
+          renderServices(lastView);
+        });
+        list.append(" ", toggle);
+      }
+      item.append(list);
       return item;
     }),
   );
@@ -474,6 +538,8 @@ function renderNodes(view) {
         { text: duration(since(view, node.joined)) },
       ];
       const row = document.createElement("tr");
+      row.id = ROW_PREFIX + node.name;
+      row.className = node.name === pickedName ? "lit" : "";
       for (const { text, mono } of cells) {
         row.append(make("td", mono ? "mono" : "", text));
       }
@@ -487,7 +553,9 @@ function renderAnswers() {
   byId("answers").replaceChildren(
     ...answers.map((answer) => {
       const item = make("li");
-      item.append(make("span", "what", answer.text));
+      const what = make("span", "what");
+      what.append(...withNode(answer.text, answer.node));
+      item.append(what);
       item.append(make("span", "when", answer.took));
       return item;
     }),
@@ -511,6 +579,12 @@ function render(view) {
   // A page opened from a node's own tab shows that node, once the node
   // is in a reading.
   if (showFirst && (globe.show(showFirst) || --showTriesLeft <= 0)) {
+    if (scrollToRow) {
+      document
+        .getElementById(ROW_PREFIX + showFirst)
+        ?.scrollIntoView({ block: "center", behavior: "smooth" });
+      scrollToRow = false;
+    }
     showFirst = null;
   }
 }
@@ -550,7 +624,7 @@ async function ask() {
       await new Promise((resolve) => setTimeout(resolve, ASK_RETRY_MS));
     }
   }
-  answers.unshift({ text, took: `${Math.round(performance.now() - began)} ms` });
+  answers.unshift({ text, node, took: `${Math.round(performance.now() - began)} ms` });
   answers.length = Math.min(answers.length, ANSWERS_SHOWN);
   renderAnswers();
 
@@ -598,6 +672,7 @@ async function start() {
       return;
     }
     renderPicked(lastView);
+    renderNodes(lastView);
     if (name && name !== MACHINE) {
       topology.asked(name);
       topology.update(lastView);
@@ -612,6 +687,7 @@ async function start() {
   readAddress();
   addEventListener("hashchange", () => {
     readAddress();
+    scrollToRow = true;
     if (lastView) {
       render(lastView);
     }
