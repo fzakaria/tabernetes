@@ -1,26 +1,33 @@
-# A web server that counts its visits in Redis, each in a browser tab.
+# A counter that every tab serves: a web server on each tab, and the
+# Redis they count visits in on one of them.
 #
 #   kubectl apply -f counter.yaml
 #   curl $(kubectl get svc web -o jsonpath='{.spec.clusterIP}'):8000
 #
-# Each answer says which node's pod gave it. With the agent started
-# with `--expose counter=default/web:8000`, the site's "Ask the cluster"
+# Each answer says which node's pod gave it, and the pod says so too,
+# in its own tab: whoever holds the phone sees a line for every request
+# the phone answered. With the agent started with
+# `--expose counter=default/web:8000`, the site's "Ask the cluster"
 # button sends its visitors' requests here.
+#
+# The web server is a DaemonSet, so every tab that joins gets one and
+# is behind the Service a few seconds later. It is a shell script: the
+# image is Alpine's 4 MB and nothing is installed, which matters when
+# every phone that joins fetches the files it runs.
 #
 # Redis keeps its data on the cluster's machine, since a pod's volumes
 # live there and not in the tab. Close the tab Redis runs in and
 # Kubernetes starts Redis in another tab, where it reads the same file,
 # and the count goes on from where it was.
 #
-# These pods come before the ones that are only there to fill a tab
-# (everywhere.yaml): the first tabs to join get Redis and the web
-# servers, so the counter works as soon as three tabs are open.
+# Redis comes before the web servers: a tab has room for one pod, so
+# Redis takes a tab from a web server when there is no tab free.
 apiVersion: scheduling.k8s.io/v1
 kind: PriorityClass
 metadata:
   name: tab-first
 value: 1000
-description: Pods that should get a tab before the pods that only fill one.
+description: Pods that should get a tab before the pods every tab gets.
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -42,8 +49,21 @@ spec:
         - name: redis
           image: redis:alpine
           # Every write goes to the file as it is made, so a tab that
-          # closes mid-count loses nothing.
-          args: ["--appendonly", "yes", "--appendfsync", "always", "--dir", "/data"]
+          # closes mid-count loses nothing. Any pod on a tab can reach
+          # Redis, and a tab is a stranger's browser, so Redis is told
+          # how much it may hold: a stranger can spoil the count and
+          # cannot fill the machine.
+          args:
+            - --appendonly
+            - "yes"
+            - --appendfsync
+            - always
+            - --dir
+            - /data
+            - --maxmemory
+            - 64mb
+            - --maxmemory-policy
+            - allkeys-lru
           ports:
             - containerPort: 6379
           volumeMounts:
@@ -66,11 +86,10 @@ spec:
     - port: 6379
 ---
 apiVersion: apps/v1
-kind: Deployment
+kind: DaemonSet
 metadata:
   name: web
 spec:
-  replicas: 3
   selector:
     matchLabels:
       app: web
@@ -80,20 +99,28 @@ spec:
         app: web
     spec:
       runtimeClassName: tab
-      priorityClassName: tab-first
+      # A DaemonSet decides which nodes get a pod from the pod's
+      # template, before the RuntimeClass adds the tabs' label and
+      # toleration to the pod. So the template names both itself, and
+      # the cluster's own machine gets no pod.
+      nodeSelector:
+        tabernetes.dev/tab: "true"
+      tolerations:
+        - key: tabernetes.dev/tab
+          operator: Exists
+          effect: NoSchedule
       containers:
         - name: web
-          image: python:3.13-alpine
+          image: alpine:3.22
           ports:
             - containerPort: 8000
           # The Service sends a pod nothing until the server in it
-          # answers: the program is started some seconds before Python
-          # is listening.
+          # answers.
           readinessProbe:
             httpGet:
               path: /healthz
               port: 8000
-            periodSeconds: 1
+            periodSeconds: 5
           env:
             - name: NODE_NAME
               valueFrom:
@@ -104,58 +131,52 @@ spec:
                 fieldRef:
                   fieldPath: metadata.name
           command:
-            - python
-            - -u
+            - sh
             - -c
             - |
-              # Answers every request with the number of requests so far,
-              # kept in Redis, and the node this copy runs on: as a line
-              # of text, or as JSON at /json. Redis is spoken to in its
-              # own protocol over a socket, so the image needs nothing
-              # installed.
-              import http.server, json, os, socket
+              # What answers one request: the visit is counted in
+              # Redis, spoken to in its own protocol over a socket, and
+              # the answer says which node gave it. nc runs this once
+              # for each connection, with the connection as its input
+              # and output, so what is written to the terminal goes to
+              # file descriptor 2.
+              cat > /answer <<'ANSWER'
+              #!/bin/sh
+              read -r method path version
+              reply() {
+                printf 'HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s' \
+                  "$1" "$2" "${#3}" "$3"
+              }
 
-              NODE = os.environ.get("NODE_NAME", "a tab")
-              POD = os.environ.get("POD_NAME", "a pod")
+              # The readiness probe's question, which is no visit.
+              if [ "$path" = /healthz ]; then
+                reply "200 OK" text/plain ""
+                exit
+              fi
 
-              def count():
-                  with socket.create_connection(("redis", 6379), timeout=5) as redis:
-                      redis.sendall(b"INCR visits\r\n")
-                      return int(redis.recv(64).strip()[1:])
+              visit=$(printf 'INCR visits\r\nQUIT\r\n' | nc -w 5 redis 6379 | head -n 1 | tr -dc 0-9)
+              if [ -z "$visit" ]; then
+                reply "503 Service Unavailable" text/plain "Redis did not answer"
+                echo "a request came, and Redis did not answer" >&2
+                exit
+              fi
+              if [ "$path" = /json ]; then
+                reply "200 OK" application/json "{\"visit\": $visit, \"node\": \"$NODE_NAME\", \"pod\": \"$POD_NAME\"}"
+              else
+                reply "200 OK" text/plain "visit $visit, answered by a pod on $NODE_NAME
+              "
+              fi
+              echo "visit $visit was answered here, on $NODE_NAME" >&2
+              ANSWER
+              chmod +x /answer
 
-              class Handler(http.server.BaseHTTPRequestHandler):
-                  def do_GET(self):
-                      # The readiness probe's question, which is no visit.
-                      if self.path == "/healthz":
-                          self.send_response(200)
-                          self.send_header("Content-Length", "0")
-                          self.end_headers()
-                          return
-                      try:
-                          visit = count()
-                      except (OSError, ValueError) as error:
-                          self.send_error(503, f"Redis did not answer: {error}")
-                          return
-                      if self.path == "/json":
-                          kind = "application/json"
-                          body = json.dumps({"visit": visit, "node": NODE, "pod": POD})
-                      else:
-                          kind = "text/plain"
-                          body = f"visit {visit}, answered by a pod on {NODE}\n"
-                      self.send_response(200)
-                      self.send_header("Content-Type", kind)
-                      self.send_header("Content-Length", str(len(body)))
-                      self.end_headers()
-                      self.wfile.write(body.encode())
-
-                  # The probe asks every second, and its lines would be
-                  # all there is in the log.
-                  def log_message(self, format, *args):
-                      if self.path != "/healthz":
-                          super().log_message(format, *args)
-
-              print("listening on :8000")
-              http.server.HTTPServer(("", 8000), Handler).serve_forever()
+              echo "Linux $(uname -r) on $(uname -m), booted in the tab that is node $NODE_NAME."
+              echo "This pod is a web server behind the cluster's Service \"web\"."
+              echo "When someone presses \"Send a request\" on the cluster's page and the"
+              echo "Service picks this pod, the request is answered on this device, and a"
+              echo "line below says so."
+              echo
+              exec nc -lk -p 8000 -e /answer
 ---
 apiVersion: v1
 kind: Service
