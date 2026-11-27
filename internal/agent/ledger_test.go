@@ -10,7 +10,8 @@ import (
 // TestLedgerTotals checks what a join, a start and a leave each add to
 // the totals: the count of joins and the peak, the start and its boot
 // time, and on the leave the node's lifetime, the pods it took with it
-// and the record for the longest-lived node.
+// and the record for the longest-lived node. A visitor's request is
+// counted once in all and once for the Service it was sent to.
 func TestLedgerTotals(t *testing.T) {
 	now := time.Unix(1000, 0)
 	book := newLedger(t.TempDir(), now)
@@ -21,7 +22,9 @@ func TestLedgerTotals(t *testing.T) {
 	book.left("pixel-1", 90*time.Second, []string{"default/web"}, now)
 	book.left("pixel-2", 30*time.Second, nil, now)
 	book.carried(4096)
-	book.asked()
+	book.asked("counter")
+	book.asked("counter")
+	book.asked("picture")
 
 	totals, events, boots := book.view()
 	if totals.Joins != 2 || totals.PeakNodes != 2 {
@@ -33,8 +36,18 @@ func TestLedgerTotals(t *testing.T) {
 	if totals.NodeSeconds != 120 || totals.LongestName != "pixel-1" || totals.LongestSeconds != 90 {
 		t.Errorf("node seconds %v, longest %s for %v", totals.NodeSeconds, totals.LongestName, totals.LongestSeconds)
 	}
-	if totals.Bytes != 4096 || totals.Asked != 1 {
+	if totals.Bytes != 4096 || totals.Asked != 3 {
 		t.Errorf("bytes %d, asked %d", totals.Bytes, totals.Asked)
+	}
+	if totals.AskedOf["counter"] != 2 || totals.AskedOf["picture"] != 1 {
+		t.Errorf("asked of each Service: %v", totals.AskedOf)
+	}
+
+	// What a reader was given is the reader's own: a later request
+	// does not change the count under it.
+	book.asked("counter")
+	if totals.AskedOf["counter"] != 2 {
+		t.Errorf("a view's count changed after the view was taken: %v", totals.AskedOf)
 	}
 	if !totals.Since.Equal(now) {
 		t.Errorf("since %v", totals.Since)
@@ -59,7 +72,8 @@ func TestLedgerTotals(t *testing.T) {
 
 // TestLedgerSaves checks that the totals and the boots a ledger saved
 // are what the next ledger starts with, the day the cluster first
-// started among them, and that the feed starts empty: what happened
+// started and the requests sent to each Service among them, and that
+// the feed starts empty: what happened
 // before a restart is not happening now.
 func TestLedgerSaves(t *testing.T) {
 	dir := t.TempDir()
@@ -67,6 +81,7 @@ func TestLedgerSaves(t *testing.T) {
 	book := newLedger(dir, first)
 	book.joined("pixel-1", 1, first)
 	book.started("pixel-1", "default/web", "Android", "Pixel-9", 2500*time.Millisecond, first)
+	book.asked("counter")
 	if err := book.save(dir); err != nil {
 		t.Fatal(err)
 	}
@@ -75,6 +90,9 @@ func TestLedgerSaves(t *testing.T) {
 	totals, events, boots := later.view()
 	if totals.Joins != 1 || !totals.Since.Equal(first) {
 		t.Errorf("after a restart: joins %d, since %v", totals.Joins, totals.Since)
+	}
+	if totals.Asked != 1 || totals.AskedOf["counter"] != 1 {
+		t.Errorf("after a restart: asked %d, of each Service %v", totals.Asked, totals.AskedOf)
 	}
 	if len(boots) != 1 || boots[0].Seconds != 2.5 || boots[0].Model != "Pixel-9" {
 		t.Errorf("after a restart the boots are %+v", boots)

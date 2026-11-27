@@ -198,20 +198,24 @@ func TestCarries(t *testing.T) {
 	}
 }
 
-// TestAskers checks that a visitor may ask a few times at once and is
-// then refused, and that another visitor is not refused with them.
+// TestAskers checks that a visitor may ask a Service a few times at
+// once and is then refused, and that neither another visitor nor the
+// same visitor's request to another Service is refused with them.
 func TestAskers(t *testing.T) {
 	var limits askers
 	for request := 0; request < asksAtOnce; request++ {
-		if !limits.allow("203.0.113.7") {
+		if !limits.allow("counter", "203.0.113.7") {
 			t.Fatalf("request %d was refused", request)
 		}
 	}
-	if limits.allow("203.0.113.7") {
+	if limits.allow("counter", "203.0.113.7") {
 		t.Error("a request past the allowance was let through")
 	}
-	if !limits.allow("203.0.113.8") {
+	if !limits.allow("counter", "203.0.113.8") {
 		t.Error("another visitor was refused")
+	}
+	if !limits.allow("picture", "203.0.113.7") {
+		t.Error("a request to another Service was refused")
 	}
 }
 

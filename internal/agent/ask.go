@@ -18,7 +18,7 @@ import (
 // /apps/<name>/<the rest of the path>.
 const pathApps = "GET /apps/{name}/{rest...}"
 
-// What one visitor may ask of the cluster: this many requests a
+// What one visitor may ask of one Service: this many requests a
 // second, with this many at once after a quiet spell. A request is
 // answered by a pod in somebody's tab, on somebody's battery.
 const (
@@ -26,7 +26,7 @@ const (
 	asksAtOnce    = 6
 )
 
-// askersKept is how many visitors' limits are remembered. Past that the
+// askersKept is how many limits are remembered. Past that the
 // table is emptied, which lets everyone start over: cheaper than
 // tracking who was seen last, and no worse for a visitor than a full
 // allowance.
@@ -41,23 +41,33 @@ const (
 	askDialTimeout = 3 * time.Second
 )
 
-// askers limits how often each visitor may ask, by address.
-type askers struct {
-	mu       sync.Mutex
-	limiters map[string]*rate.Limiter
+// asker is whose limit a limit is: a visitor's address, and the exposed
+// Service the visitor asks, by the name the Service is exposed under.
+type asker struct {
+	name    string
+	address string
 }
 
-// allow reports whether a visitor at an address may ask now.
-func (a *askers) allow(address string) bool {
+// askers limits how often each visitor may ask each Service. The
+// limits are apart so that a page that reads one Service every second
+// leaves its visitor's allowance for another whole.
+type askers struct {
+	mu       sync.Mutex
+	limiters map[asker]*rate.Limiter
+}
+
+// allow reports whether a visitor at an address may ask a Service now.
+func (a *askers) allow(name, address string) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.limiters == nil || len(a.limiters) >= askersKept {
-		a.limiters = map[string]*rate.Limiter{}
+		a.limiters = map[asker]*rate.Limiter{}
 	}
-	limiter := a.limiters[address]
+	who := asker{name: name, address: address}
+	limiter := a.limiters[who]
 	if limiter == nil {
 		limiter = rate.NewLimiter(asksPerSecond, asksAtOnce)
-		a.limiters[address] = limiter
+		a.limiters[who] = limiter
 	}
 	return limiter.Allow()
 }
@@ -70,13 +80,14 @@ func (a *askers) allow(address string) bool {
 // and for a path that Service was exposed with, and only so often for
 // each visitor.
 func (a *Agent) serveApp(w http.ResponseWriter, r *http.Request) {
-	exposed, has := a.config.Exposed[r.PathValue("name")]
+	name := r.PathValue("name")
+	exposed, has := a.config.Exposed[name]
 	rest := "/" + r.PathValue("rest")
 	if !has || !exposed.Carries(rest) {
 		http.NotFound(w, r)
 		return
 	}
-	if !a.askers.allow(clientAddress(r)) {
+	if !a.askers.allow(name, clientAddress(r)) {
 		http.Error(w, "too many requests; the pods are on people's phones", http.StatusTooManyRequests)
 		return
 	}
@@ -94,7 +105,7 @@ func (a *Agent) serveApp(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("the cluster has no service %s/%s", exposed.Namespace, exposed.Service), http.StatusServiceUnavailable)
 		return
 	}
-	a.ledger.asked()
+	a.ledger.asked(name)
 
 	target := &url.URL{Scheme: "http", Host: net.JoinHostPort(address, strconv.Itoa(exposed.Port))}
 	proxy := &httputil.ReverseProxy{

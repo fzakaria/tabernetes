@@ -176,7 +176,7 @@ answered.
 
 Only a GET is carried, only to a Service named when the agent started,
 without the visitor's own headers, and no more than two a second for
-one address. An entry can end with a path
+one address and one Service. An entry can end with a path
 (`--expose counter=default/web:8000/json`), and then only that path of
 the Service and the paths under it are carried: what else the Service's
 pods answer is for the cluster and not for visitors. A request that

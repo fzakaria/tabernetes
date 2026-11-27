@@ -238,10 +238,13 @@ function renderTiles(view) {
   );
 
   tile("moved", count(view.totals.podsMoved), "each started again on another node");
+
+  // The requests visitors sent with the button, and not what the page
+  // itself reads from another exposed Service every second.
   tile(
     "carried",
     bytes(view.totals.bytes),
-    `${count(view.totals.asked)} requests asked of the cluster`,
+    `${count(view.totals.askedOf?.[ASK_NAME] ?? 0)} requests asked of the cluster`,
   );
 }
 

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"sync"
@@ -55,8 +56,11 @@ type Totals struct {
 	// Bytes is how much has passed between tabs and the machine.
 	Bytes int64 `json:"bytes"`
 	// Asked is how many requests the site's visitors sent into the
-	// cluster.
-	Asked int64 `json:"asked"`
+	// cluster, and AskedOf how many of them went to each exposed
+	// Service, by the name the Service is exposed under. A count kept
+	// from before the Services were told apart has no share for any.
+	Asked   int64            `json:"asked"`
+	AskedOf map[string]int64 `json:"askedOf,omitempty"`
 	// PeakNodes is the most nodes there have been at once.
 	PeakNodes int `json:"peakNodes"`
 	// LongestName and LongestSeconds are the node that lasted longest.
@@ -219,16 +223,24 @@ func (l *ledger) carried(bytes int64) {
 	l.mu.Unlock()
 }
 
-// asked counts one request a visitor sent into the cluster.
-func (l *ledger) asked() {
+// asked counts one request a visitor sent to an exposed Service, by
+// the name the Service is exposed under.
+func (l *ledger) asked(name string) {
 	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.totals.Asked++
-	l.mu.Unlock()
+	if l.totals.AskedOf == nil {
+		l.totals.AskedOf = map[string]int64{}
+	}
+	l.totals.AskedOf[name]++
 }
 
 // view returns the totals, the events and the boots as they are now.
+// All three are the caller's own.
 func (l *ledger) view() (Totals, []Event, []Boot) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.totals, append([]Event{}, l.events...), append([]Boot{}, l.boots...)
+	totals := l.totals
+	totals.AskedOf = maps.Clone(l.totals.AskedOf)
+	return totals, append([]Event{}, l.events...), append([]Boot{}, l.boots...)
 }
