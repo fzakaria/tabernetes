@@ -402,12 +402,14 @@ func (a *Agent) runContainer(ctx context.Context, r *run, sandbox *runtime.Sandb
 
 	// The tab loads the page, which boots the guest and starts the
 	// program.
+	_, shell := kube.ShellUser(r.pod)
 	r.node.tell(Message{
 		Type:  MessageRun,
 		ID:    r.id,
 		Path:  containerPath(r.id),
 		Pod:   r.pod.Namespace + "/" + r.pod.Name,
 		Image: plan.Image,
+		Shell: shell,
 	})
 	told := time.Now()
 	if err := a.waitRunning(ctx, r.id, container); err != nil {

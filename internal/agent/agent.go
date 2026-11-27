@@ -172,6 +172,8 @@ type Agent struct {
 	// askers limit how often each visitor may send a request into the
 	// cluster.
 	askers askers
+	// shells are the shells tabs have open in their containers.
+	shells shells
 
 	// origins are the hosts whose pages may open a tab's socket.
 	origins []string
@@ -234,6 +236,9 @@ type Message struct {
 	Path  string `json:"path,omitempty"`
 	Pod   string `json:"pod,omitempty"`
 	Image string `json:"image,omitempty"`
+	// Shell says, in a "run", that the pod lets its tab have a shell in
+	// the container.
+	Shell bool `json:"shell,omitempty"`
 	// Reason says why a tab is turned away, in a "refused", and Retry
 	// that the tab may ask again by itself.
 	Reason string `json:"reason,omitempty"`
@@ -376,6 +381,14 @@ func (a *Agent) refusal() error {
 	if len(a.nodes) >= a.config.MaxNodes {
 		return ErrFull
 	}
+	return a.pressed()
+}
+
+// pressed returns why the machine should be asked for nothing more
+// now, or nil: too little memory is left, which is ErrFull, or the
+// CPUs are too busy, which is ErrBusy. The caller holds the agent's
+// lock.
+func (a *Agent) pressed() error {
 	reading, busy, known := a.machineNow()
 	if !known {
 		return nil

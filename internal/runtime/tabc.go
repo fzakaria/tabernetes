@@ -205,6 +205,21 @@ func parseList(output []byte) map[string]Listed {
 	return containers
 }
 
+// The shell a tab is given in a container, and the kind of terminal
+// the shell is told it has, which is the kind a page's terminal is.
+const (
+	shellProgram  = "sh"
+	shellTerminal = "TERM=xterm-256color"
+)
+
+// Shell returns the command that runs a shell in a running container
+// as a user, as a second program beside the container's own. The
+// command has not been started: its input and output are a terminal
+// the caller gives it.
+func (t Tabc) Shell(id, user string) *exec.Cmd {
+	return exec.Command(t.Binary, "exec", "-it", "-u", user, "-e", shellTerminal, id, shellProgram)
+}
+
 // Remove deletes a container by id, whatever state tabc left it in.
 // The supervisor of a tabc that had to be killed is still there, and
 // this is what ends it.
