@@ -16,6 +16,21 @@ fi
 PUBLIC_URL=$1
 BUNDLE=/opt/tabernetes
 
+# What this machine was last set up with stays as it was unless this
+# run says otherwise: someone who deploys a new bundle without naming
+# every setting again does not undo the ones that were named before.
+SETTINGS=/etc/tabernetes/settings
+if [ -f "$SETTINGS" ]; then
+  previous=$(cat "$SETTINGS")
+  for line in $previous; do
+    name=${line%%=*}
+    eval "current=\${$name-}"
+    if [ -z "$current" ]; then
+      eval "$name=\${line#*=}"
+    fi
+  done
+fi
+
 # The most tabs that may be nodes at once, and how many of them from
 # one address. The agent turns tabs away sooner than MAX_NODES when the
 # machine runs short of memory, which is the limit that matters; this
@@ -87,10 +102,12 @@ until k3s kubectl get --raw /readyz >/dev/null 2>&1; do
 done
 k3s kubectl apply -f "$BUNDLE/deploy/manifests/runtimeclass.yaml"
 if [ "$DEMO" = yes ]; then
-  # The pod for every tab was a Deployment of a fixed size before it
-  # was a DaemonSet.
-  k3s kubectl delete deployment everywhere --ignore-not-found
-  k3s kubectl apply -f "$BUNDLE/examples/counter.yaml" -f "$BUNDLE/examples/everywhere.yaml"
+  # What the demo was before every tab's pod was the counter's web
+  # server: a pod for every tab that only told the time, and web
+  # servers on three of the tabs.
+  k3s kubectl delete deployment everywhere web --ignore-not-found
+  k3s kubectl delete daemonset everywhere --ignore-not-found
+  k3s kubectl apply -f "$BUNDLE/examples/counter.yaml"
 fi
 
 # The residents' word: made once, and kept, so that residents that are
@@ -100,6 +117,32 @@ if [ ! -s "$WORD_FILE" ]; then
   (umask 077 && od -An -N16 -tx1 /dev/urandom | tr -d ' \n' > "$WORD_FILE")
 fi
 RESIDENT_WORD=$(cat "$WORD_FILE")
+
+# Where addresses are, for the site's map: DB-IP's free database of
+# cities, which is published each month. The agent reads it on this
+# machine, so no visitor's address goes anywhere to be looked up. A
+# month that is not published yet leaves the file as it was, and
+# without any file the map goes by each browser's time zone.
+GEO_DIR=/var/lib/tabernetes/geo
+GEO_DB=$GEO_DIR/dbip-city-lite.mmdb
+mkdir -p "$GEO_DIR"
+if [ ! -s "$GEO_DB" ] || [ -n "$(find "$GEO_DB" -mtime +30)" ]; then
+  if curl -sfL "https://download.db-ip.com/free/dbip-city-lite-$(date +%Y-%m).mmdb.gz" -o "$GEO_DB.gz"; then
+    gunzip -c "$GEO_DB.gz" > "$GEO_DB.new" && mv "$GEO_DB.new" "$GEO_DB"
+  fi
+  rm -f "$GEO_DB.gz"
+fi
+
+# The settings a later run starts from. None of them is a secret, and
+# none has a space in it.
+mkdir -p /etc/tabernetes
+cat > "$SETTINGS" <<KEPT
+MAX_NODES=$MAX_NODES
+MAX_NODES_PER_ADDRESS=$MAX_NODES_PER_ADDRESS
+RESIDENTS=$RESIDENTS
+ZONE=$ZONE
+DEMO=$DEMO
+KEPT
 
 # The agent. Its settings hold the residents' word, so they are root's
 # to read.
