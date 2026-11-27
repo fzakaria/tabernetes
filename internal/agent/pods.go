@@ -54,10 +54,10 @@ const (
 	exitFailed        = 1
 )
 
-// The files of a pod's directory.
+// Where pods' directories are kept under the agent's state directory,
+// and the modes of what the agent makes there.
 const (
 	podsDir     = "pods"
-	logFile     = "log"
 	podDirMode  = 0o755
 	logFileMode = 0o644
 )
@@ -103,6 +103,13 @@ func (a *Agent) PodChanged(pod *corev1.Pod) {
 
 	node := a.nodes[pod.Spec.NodeName]
 	if node == nil {
+		// A pod for a tab, on a node that is no tab the agent has: the
+		// tab went as the scheduler chose it, or while no agent was
+		// running. Nothing will ever run the pod, so the pod is removed
+		// for its controller to make another.
+		if class := pod.Spec.RuntimeClassName; class != nil && *class == a.config.RuntimeClass {
+			go a.config.Cluster.RemovePod(context.WithoutCancel(a.ctx), pod)
+		}
 		return
 	}
 	running := a.runs[pod.UID]
@@ -122,13 +129,16 @@ func (a *Agent) PodChanged(pod *corev1.Pod) {
 	}
 }
 
-// PodGone hears of a pod the API server no longer has.
+// PodGone hears of a pod the API server no longer has. Whatever of the
+// pod is still running is stopped, and the pod's log goes with it.
 func (a *Agent) PodGone(pod *corev1.Pod) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	if running := a.runs[pod.UID]; running != nil {
+	running := a.runs[pod.UID]
+	a.mu.Unlock()
+	if running != nil {
 		running.cancel()
 	}
+	a.forgetLog(pod.Namespace, pod.Name, string(pod.UID))
 }
 
 // start begins a pod's run. The caller holds the agent's lock.
@@ -174,11 +184,27 @@ func (a *Agent) supervise(ctx context.Context, r *run) {
 	a.log.Printf("pod %s: stopped", name)
 }
 
+// failure is why a container is not running, in a kubelet's words and
+// in the agent's.
+type failure struct {
+	reason string
+	err    error
+}
+
 // runPod takes a pod from scheduled to over: the image, the sandbox,
-// then the container in the node's tab, started again as the pod's
-// restart policy says, with the pod's status written at every step.
+// then the container in the node's tab, with the pod's status written
+// at every step.
+//
+// What happens when a step fails, or the program ends, is the pod's
+// restart policy's to say, as with a kubelet. Under Always, and under
+// OnFailure after a failure, the pod stays where it is and the step is
+// tried again after a wait that doubles each time; the pod is never
+// marked failed, since a controller answers a failed pod with a new
+// one, and a pod that cannot start would be replaced without end. Only
+// a pod that asks for no restarts ends at its first failure.
 func (a *Agent) runPod(ctx context.Context, r *run) {
 	container := r.pod.Spec.Containers[0]
+	policy := r.pod.Spec.RestartPolicy
 	snapshot := kube.Snapshot{
 		Container:   container.Name,
 		Image:       container.Image,
@@ -201,89 +227,56 @@ func (a *Agent) runPod(ctx context.Context, r *run) {
 		defer cancel()
 		a.config.Cluster.Event(background, r.pod, kind, reason, message)
 	}
-	fail := func(reason string, err error) {
-		snapshot.Stage = kube.StageExited
-		snapshot.ExitCode = exitFailed
-		snapshot.Reason = reason
-		snapshot.Message = err.Error()
-		snapshot.Finished = metav1.Now()
-		report()
-		event(eventWarning, reason, err.Error())
-	}
 	report()
 
-	// What tabc is going to be told.
+	// The pod's directory, with its volumes and its log, and the
+	// sandbox, which is made on the first try that gets that far and
+	// kept for the tries after.
 	podDir := filepath.Join(a.config.StateDir, podsDir, string(r.pod.UID))
-	plan, err := runtime.PlanFor(r.pod, r.id, podDir, a.config.Limits)
-	if err != nil {
-		fail(reasonUnsupported, err)
-		return
-	}
-	if len(plan.Skipped) > 0 {
-		event(eventWarning, reasonSkipped, "a tab leaves out: "+strings.Join(plan.Skipped, ", "))
-	}
-
-	// The pod's directory, with its volumes and its log.
 	defer os.RemoveAll(podDir)
-	for _, dir := range append([]string{podDir}, plan.EmptyDirs...) {
-		if err := os.MkdirAll(dir, podDirMode); err != nil {
-			fail(reasonStart, err)
+	var sandbox *runtime.Sandbox
+	defer func() {
+		if sandbox == nil {
 			return
 		}
-	}
-	log, err := os.OpenFile(filepath.Join(podDir, logFile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, logFileMode)
-	if err != nil {
-		fail(reasonStart, err)
-		return
-	}
-	defer log.Close()
-
-	if err := a.pullOnce(ctx, plan.Image); err != nil {
-		if ctx.Err() == nil {
-			fail(reasonImagePull, err)
-		}
-		return
-	}
-
-	// The sandbox, which gives the pod its address.
-	sandbox, err := a.config.Network.Create(ctx, sandboxPrefix+r.id[:sandboxIDLength], r.pod.Namespace)
-	if err != nil {
-		if ctx.Err() == nil {
-			fail(reasonSandbox, err)
-		}
-		return
-	}
-	defer func() {
 		if err := sandbox.Destroy(context.WithoutCancel(ctx)); err != nil {
 			a.log.Printf("pod %s/%s: %v", r.pod.Namespace, r.pod.Name, err)
 		}
 	}()
-	snapshot.PodIP = sandbox.IP
-	report()
 
-	// The container, as many times as the restart policy asks.
 	delay := restartDelayFirst
 	for {
-		exit, ran := a.runContainer(ctx, r, sandbox, plan, log, &snapshot, report, fail)
-		if !ran || ctx.Err() != nil {
+		exit, failed := a.attempt(ctx, r, podDir, &sandbox, &snapshot, report, event)
+		if ctx.Err() != nil {
 			return
 		}
 
-		policy := r.pod.Spec.RestartPolicy
-		again := policy == corev1.RestartPolicyAlways || (policy == corev1.RestartPolicyOnFailure && exit != 0)
-		snapshot.ExitCode = int32(exit)
+		// Over, or to be tried again.
+		again := policy == corev1.RestartPolicyAlways ||
+			(policy == corev1.RestartPolicyOnFailure && (failed != nil || exit != 0))
 		snapshot.Finished = metav1.Now()
+		snapshot.ExitCode = int32(exit)
+		snapshot.Reason, snapshot.Message = "", ""
+		if failed != nil {
+			snapshot.ExitCode = exitFailed
+			snapshot.Reason = failed.reason
+			snapshot.Message = failed.err.Error()
+			event(eventWarning, failed.reason, failed.err.Error())
+		}
 		if !again {
 			snapshot.Stage = kube.StageExited
 			report()
 			return
 		}
 
-		// Waiting to start again, for longer each time.
+		// Waiting, for longer each time. A program that ran and ended
+		// is a restart; a container that never started is not.
 		snapshot.Stage = kube.StageCreating
-		snapshot.Reason = reasonBackOff
-		snapshot.Message = fmt.Sprintf("the program exited with status %d; starting it again in %s", exit, delay)
-		snapshot.Restarts++
+		if failed == nil {
+			snapshot.Restarts++
+			snapshot.Reason = reasonBackOff
+			snapshot.Message = fmt.Sprintf("the program exited with status %d; starting it again in %s", exit, delay)
+		}
 		report()
 		select {
 		case <-time.After(delay):
@@ -291,20 +284,60 @@ func (a *Agent) runPod(ctx context.Context, r *run) {
 			return
 		}
 		delay = min(delay*2, restartDelayMost)
-		snapshot.Reason, snapshot.Message = "", ""
 	}
 }
 
+// attempt tries once to run the pod's program to its end: the plan, the
+// image, the sandbox if there is none yet, then the container. It
+// returns the program's exit status, or why there was no program to
+// have one.
+func (a *Agent) attempt(ctx context.Context, r *run, podDir string, sandbox **runtime.Sandbox,
+	snapshot *kube.Snapshot, report func(), event func(kind, reason, message string)) (int, *failure) {
+	// What tabc is going to be told.
+	plan, err := runtime.PlanFor(r.pod, r.id, podDir, a.config.Limits)
+	if err != nil {
+		return 0, &failure{reasonUnsupported, err}
+	}
+	if len(plan.Skipped) > 0 && snapshot.Restarts == 0 && snapshot.Reason == "" {
+		event(eventWarning, reasonSkipped, "a tab leaves out: "+strings.Join(plan.Skipped, ", "))
+	}
+
+	// The directories of the pod's volumes, and its log.
+	for _, dir := range append([]string{podDir}, plan.Dirs...) {
+		if err := os.MkdirAll(dir, podDirMode); err != nil {
+			return 0, &failure{reasonStart, err}
+		}
+	}
+	log, err := a.openLog(r.pod.Namespace, r.pod.Name, string(r.pod.UID))
+	if err != nil {
+		return 0, &failure{reasonStart, err}
+	}
+	defer log.Close()
+
+	if err := a.pullOnce(ctx, plan.Image); err != nil {
+		return 0, &failure{reasonImagePull, err}
+	}
+
+	// The sandbox, which gives the pod its address.
+	if *sandbox == nil {
+		made, err := a.config.Network.Create(ctx, sandboxPrefix+r.id[:sandboxIDLength], r.pod.Namespace)
+		if err != nil {
+			return 0, &failure{reasonSandbox, err}
+		}
+		*sandbox = made
+		snapshot.PodIP = made.IP
+		report()
+	}
+	return a.runContainer(ctx, r, *sandbox, plan, log, snapshot, report)
+}
+
 // runContainer runs the pod's program once: tabc in the sandbox, the
-// page in the node's tab, and a wait for the program to end. It returns
-// the program's exit status, and whether there is one: a container that
-// could not be started, or was stopped, has none.
+// page in the node's tab, and a wait for the program to end.
 func (a *Agent) runContainer(ctx context.Context, r *run, sandbox *runtime.Sandbox, plan runtime.Plan, log *os.File,
-	snapshot *kube.Snapshot, report func(), fail func(string, error)) (exit int, ran bool) {
+	snapshot *kube.Snapshot, report func()) (int, *failure) {
 	container, err := a.config.Tabc.Start(sandbox, plan.Args, log)
 	if err != nil {
-		fail(reasonStart, err)
-		return 0, false
+		return 0, &failure{reasonStart, err}
 	}
 
 	// Whatever happens next, the container and its page are cleared
@@ -327,20 +360,18 @@ func (a *Agent) runContainer(ctx context.Context, r *run, sandbox *runtime.Sandb
 		Image: plan.Image,
 	})
 	if err := a.waitRunning(ctx, r.id, container); err != nil {
-		if ctx.Err() == nil {
-			fail(reasonBoot, err)
-		}
-		return 0, false
+		return 0, &failure{reasonBoot, err}
 	}
 	snapshot.Stage = kube.StageRunning
 	snapshot.Started = metav1.Now()
+	snapshot.Reason, snapshot.Message = "", ""
 	report()
 
 	select {
 	case <-container.Done():
-		return container.Exit(), true
+		return container.Exit(), nil
 	case <-ctx.Done():
-		return 0, false
+		return 0, nil
 	}
 }
 

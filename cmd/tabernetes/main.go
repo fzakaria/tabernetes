@@ -6,6 +6,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
@@ -14,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -76,6 +79,10 @@ func run() error {
 		nodeMemory    = flag.String("node-memory", "256Mi", "the memory one tab offers")
 		hostPathRoot  = flag.String("host-path-root", "", "the one directory a pod's hostPath volume may be under (default: none)")
 		guestKernel   = flag.String("guest-kernel", "7.3.4-unkernel", "the kernel version a node reports: the guest's")
+		kubeletCert   = flag.String("kubelet-cert", "/var/lib/rancher/k3s/agent/serving-kubelet.crt", "the certificate the agent answers the API server's kubelet requests with")
+		kubeletKey    = flag.String("kubelet-key", "/var/lib/rancher/k3s/agent/serving-kubelet.key", "the certificate's key")
+		kubeletCA     = flag.String("kubelet-client-ca", "/var/lib/rancher/k3s/agent/client-ca.crt", "the authority whose clients may make kubelet requests: the API server's")
+		runtimeClass  = flag.String("runtime-class", "tab", "the RuntimeClass whose pods run in tabs")
 		showVersion   = flag.Bool("version", false, "print the version and exit")
 	)
 	flag.Parse()
@@ -139,6 +146,7 @@ func run() error {
 		Limits:             runtime.Limits{MaxMemoryMiB: memory.Value() >> 20, HostPathRoot: *hostPathRoot},
 		MaxNodes:           *maxNodes,
 		MaxNodesPerAddress: *maxPerAddress,
+		RuntimeClass:       *runtimeClass,
 		StateDir:           *stateDir,
 		Log:                logger,
 	})
@@ -155,6 +163,22 @@ func run() error {
 	go func() { serving <- server.ListenAndServe() }()
 	logger.Printf("the site is on %s, as %s", *listen, *publicURL)
 
+	// The kubelet's own port, which is where `kubectl logs` ends up.
+	// Without it the cluster still runs pods, so a failure here is said
+	// and passed over.
+	kubelet, err := kubeletServer(net.JoinHostPort(*address, strconv.Itoa(*kubeletPort)), *kubeletCert, *kubeletKey, *kubeletCA, tabs.KubeletHandler())
+	if err != nil {
+		logger.Printf("no kubelet port, so no `kubectl logs`: %v", err)
+	} else {
+		go func() {
+			if err := kubelet.ListenAndServeTLS("", ""); !errors.Is(err, http.ErrServerClosed) {
+				logger.Printf("the kubelet port: %v", err)
+			}
+		}()
+		defer kubelet.Close()
+		logger.Printf("kubelet requests are answered on %s", kubelet.Addr)
+	}
+
 	running := make(chan error, 1)
 	go func() { running <- tabs.Run(ctx) }()
 
@@ -169,6 +193,37 @@ func run() error {
 		server.Shutdown(shutdown)
 		return err
 	}
+}
+
+// kubeletServer returns a server for the API server's kubelet requests.
+// Each node says its kubelet is at this address, and the API server
+// connects as it does to any kubelet: it checks the server's
+// certificate, and shows one of its own. Only a client the cluster's
+// authority vouches for is answered, since a pod's log is not for
+// every pod that can reach the port.
+func kubeletServer(address, certFile, keyFile, clientCAFile string, handler http.Handler) (*http.Server, error) {
+	certificate, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, err
+	}
+	authority, err := os.ReadFile(clientCAFile)
+	if err != nil {
+		return nil, err
+	}
+	clients := x509.NewCertPool()
+	if !clients.AppendCertsFromPEM(authority) {
+		return nil, fmt.Errorf("%s holds no certificate", clientCAFile)
+	}
+	return &http.Server{
+		Addr:    address,
+		Handler: handler,
+		TLSConfig: &tls.Config{
+			Certificates: []tls.Certificate{certificate},
+			ClientAuth:   tls.RequireAndVerifyClientCert,
+			ClientCAs:    clients,
+			MinVersion:   tls.VersionTLS12,
+		},
+	}, nil
 }
 
 // ownAddress returns the address this machine would connect out from.

@@ -48,9 +48,10 @@ type Plan struct {
 	Image string
 	// Args are the words after `tabc`.
 	Args []string
-	// EmptyDirs are the directories to make before the run, one for
-	// each emptyDir volume the container mounts.
-	EmptyDirs []string
+	// Dirs are the directories to make before the run: one for each
+	// emptyDir volume the container mounts, and each hostPath the pod
+	// asks to have made.
+	Dirs []string
 	// Skipped says what of the pod the run leaves out, for an event.
 	Skipped []string
 }
@@ -71,14 +72,20 @@ func PlanFor(pod *corev1.Pod, name, podDir string, limits Limits) (Plan, error) 
 	args := []string{"run", "--link", "--name", name, "--cpus", guestCPUs}
 	args = append(args, "-m", strconv.FormatInt(memoryMiB(container, limits), 10)+"m")
 
-	// The environment: the values the pod spells out. A value taken
-	// from a secret, a config map or the pod's own fields is left out.
+	// The environment: the values the pod spells out, and the ones it
+	// takes from its own name, namespace and node. A value taken from a
+	// secret or a config map is left out.
 	for _, variable := range container.Env {
+		value := variable.Value
 		if variable.ValueFrom != nil {
-			plan.Skipped = append(plan.Skipped, "env "+variable.Name+" (valueFrom)")
-			continue
+			var known bool
+			value, known = fieldValue(pod, variable.ValueFrom)
+			if !known {
+				plan.Skipped = append(plan.Skipped, "env "+variable.Name+" (valueFrom)")
+				continue
+			}
 		}
-		args = append(args, "-e", variable.Name+"="+variable.Value)
+		args = append(args, "-e", variable.Name+"="+value)
 	}
 	if len(container.EnvFrom) > 0 {
 		plan.Skipped = append(plan.Skipped, "envFrom")
@@ -119,9 +126,12 @@ func PlanFor(pod *corev1.Pod, name, podDir string, limits Limits) (Plan, error) 
 				return Plan{}, fmt.Errorf("volume %s: hostPath %s is not under %s", volume.Name, volume.HostPath.Path, limits.HostPathRoot)
 			}
 			source = filepath.Clean(volume.HostPath.Path)
+			if kind := volume.HostPath.Type; kind != nil && *kind == corev1.HostPathDirectoryOrCreate {
+				plan.Dirs = append(plan.Dirs, source)
+			}
 		case volume.EmptyDir != nil:
 			source = filepath.Join(podDir, "volumes", volume.Name)
-			plan.EmptyDirs = append(plan.EmptyDirs, source)
+			plan.Dirs = append(plan.Dirs, source)
 		default:
 			plan.Skipped = append(plan.Skipped, "volume "+mount.Name)
 			continue
@@ -144,6 +154,29 @@ func PlanFor(pod *corev1.Pod, name, podDir string, limits Limits) (Plan, error) 
 	args = append(args, container.Image)
 	plan.Args = append(args, words...)
 	return plan, nil
+}
+
+// fieldValue returns the value of a variable that names one of the
+// pod's own fields, and whether the field is one known before the
+// container starts.
+func fieldValue(pod *corev1.Pod, source *corev1.EnvVarSource) (string, bool) {
+	if source.FieldRef == nil {
+		return "", false
+	}
+	switch source.FieldRef.FieldPath {
+	case "metadata.name":
+		return pod.Name, true
+	case "metadata.namespace":
+		return pod.Namespace, true
+	case "metadata.uid":
+		return string(pod.UID), true
+	case "spec.nodeName":
+		return pod.Spec.NodeName, true
+	case "spec.serviceAccountName":
+		return pod.Spec.ServiceAccountName, true
+	default:
+		return "", false
+	}
 }
 
 // memoryMiB returns the guest's memory: the container's limit, or what

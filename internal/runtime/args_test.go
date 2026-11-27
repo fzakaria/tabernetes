@@ -98,6 +98,40 @@ func TestPlanForEnvPortsAndUser(t *testing.T) {
 	}
 }
 
+// TestPlanForFieldRef checks that a variable taken from the pod's own
+// name, namespace or node is given its value, and that one taken from a
+// field the agent does not know before the container starts is left out
+// and said to be.
+func TestPlanForFieldRef(t *testing.T) {
+	field := func(path string) *corev1.EnvVarSource {
+		return &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: path}}
+	}
+	pod := podWith(corev1.Container{
+		Image: "app",
+		Env: []corev1.EnvVar{
+			{Name: "POD", ValueFrom: field("metadata.name")},
+			{Name: "NAMESPACE", ValueFrom: field("metadata.namespace")},
+			{Name: "NODE", ValueFrom: field("spec.nodeName")},
+			{Name: "IP", ValueFrom: field("status.podIP")},
+		},
+	})
+	pod.Name, pod.Namespace, pod.Spec.NodeName = "web-1", "shop", "pixel-9-3fa2"
+
+	plan, err := PlanFor(pod, "c1", "/pods/p", limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(plan.Args, " ")
+	for _, want := range []string{"-e POD=web-1", "-e NAMESPACE=shop", "-e NODE=pixel-9-3fa2"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("%q is not in %q", want, joined)
+		}
+	}
+	if strings.Contains(joined, "IP=") || len(plan.Skipped) != 1 {
+		t.Errorf("status.podIP: args %q, skipped %q", joined, plan.Skipped)
+	}
+}
+
 // TestPlanForMemory checks that the guest's memory is the container's
 // limit, else its request, rounded up to a MiB, never under tabc's
 // least and never over the agent's most.
@@ -164,11 +198,29 @@ func TestPlanForVolumes(t *testing.T) {
 			t.Errorf("%q is not in %q", want, joined)
 		}
 	}
-	if !reflect.DeepEqual(plan.EmptyDirs, []string{"/pods/p/volumes/scratch"}) {
-		t.Errorf("empty dirs %q", plan.EmptyDirs)
+	if !reflect.DeepEqual(plan.Dirs, []string{"/pods/p/volumes/scratch"}) {
+		t.Errorf("dirs to make %q", plan.Dirs)
 	}
 	if !reflect.DeepEqual(plan.Skipped, []string{"volume settings"}) {
 		t.Errorf("skipped %q", plan.Skipped)
+	}
+}
+
+// TestPlanForHostPathCreate checks that a hostPath the pod asks to have
+// made is listed to be made, and that one the pod only names is not.
+func TestPlanForHostPathCreate(t *testing.T) {
+	create := corev1.HostPathDirectoryOrCreate
+	mounts := []corev1.VolumeMount{{Name: "made", MountPath: "/made"}, {Name: "there", MountPath: "/there"}}
+	pod := podWith(corev1.Container{Image: "app", VolumeMounts: mounts},
+		corev1.Volume{Name: "made", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/var/lib/tabernetes/data/new", Type: &create}}},
+		corev1.Volume{Name: "there", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/var/lib/tabernetes/data/old"}}},
+	)
+	plan, err := PlanFor(pod, "c1", "/pods/p", limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(plan.Dirs, []string{"/var/lib/tabernetes/data/new"}) {
+		t.Errorf("dirs to make %q", plan.Dirs)
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -71,6 +72,10 @@ type Config struct {
 	// MaxNodesPerAddress how many of those may come from one address.
 	MaxNodes           int
 	MaxNodesPerAddress int
+	// RuntimeClass is the name of the RuntimeClass whose pods run in
+	// tabs. A pod of that class bound to a node that is no tab of this
+	// agent's is bound to a tab that has gone.
+	RuntimeClass string
 	// StateDir is where each pod's log and volumes are kept.
 	StateDir string
 	Log      *log.Logger
@@ -96,6 +101,8 @@ type Agent struct {
 	pulls map[string]*pull
 	// peakNodes is the most nodes there have been at once.
 	peakNodes int
+	// logs are where pods' logs are, by "namespace/name".
+	logs map[string]string
 
 	// origins are the hosts whose pages may open a tab's socket.
 	origins []string
@@ -235,6 +242,10 @@ func (a *Agent) removeNodeAndPods(ctx context.Context, name string) {
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 
+	// The node first: see Leave.
+	if err := a.config.Cluster.RemoveNode(ctx, name); err != nil {
+		a.log.Printf("node %s: %v", name, err)
+	}
 	pods, err := a.config.Cluster.PodsOn(ctx, name)
 	if err != nil {
 		a.log.Printf("node %s: listing its pods: %v", name, err)
@@ -243,9 +254,6 @@ func (a *Agent) removeNodeAndPods(ctx context.Context, name string) {
 		if err := a.config.Cluster.RemovePod(ctx, &pods[index]); err != nil {
 			a.log.Printf("node %s: removing pod %s: %v", name, pods[index].Name, err)
 		}
-	}
-	if err := a.config.Cluster.RemoveNode(ctx, name); err != nil {
-		a.log.Printf("node %s: %v", name, err)
 	}
 }
 
@@ -279,11 +287,11 @@ func (a *Agent) Join(ctx context.Context, hello tab.Hello, address string) (*Nod
 
 	// The place is held under a name nothing else has, until the node's
 	// own name is known.
-	placeholder := "joining-" + randomHex(containerIDBytes)
+	placeholder := placeholderPrefix + randomHex(containerIDBytes)
 	a.nodes[placeholder] = node
 	a.mu.Unlock()
 
-	name, err := a.register(ctx, hello)
+	err := a.register(ctx, node)
 
 	a.mu.Lock()
 	delete(a.nodes, placeholder)
@@ -291,35 +299,57 @@ func (a *Agent) Join(ctx context.Context, hello tab.Hello, address string) (*Nod
 		a.mu.Unlock()
 		return nil, err
 	}
-	node.Name = name
-	a.nodes[name] = node
 	if len(a.nodes) > a.peakNodes {
 		a.peakNodes = len(a.nodes)
 	}
 	count := len(a.nodes)
 	a.mu.Unlock()
 
-	a.log.Printf("node %s joined from %s (%s); %d nodes", name, address, hello.Describe(), count)
+	a.log.Printf("node %s joined from %s (%s); %d nodes", node.Name, address, hello.Describe(), count)
 	return node, nil
 }
 
-// register creates the tab's Node under a name that is free.
-func (a *Agent) register(ctx context.Context, hello tab.Hello) (string, error) {
+// placeholderPrefix starts the name a tab's place is held under while
+// the tab's Node is being made. No node's name can start with it: a
+// node's name ends with a dash and a suffix, and this has neither.
+const placeholderPrefix = "joining:"
+
+// register creates the tab's Node under a name that is free, and gives
+// the node that name.
+//
+// The agent knows the node by the name before the API server does. The
+// scheduler may bind a pod to a Node the moment the Node exists, and a
+// pod bound to a node the agent does not know is taken for one whose
+// tab has gone.
+func (a *Agent) register(ctx context.Context, node *Node) error {
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 
 	var err error
 	for attempt := 0; attempt < nameAttempts; attempt++ {
-		name := hello.NodeName(randomHex(nodeSuffixBytes))
-		err = a.config.Cluster.AddNode(ctx, kube.Node(name, hello, a.config.Node, metav1.Now()))
-		if err == nil {
-			return name, nil
+		name := node.Hello.NodeName(randomHex(nodeSuffixBytes))
+		a.mu.Lock()
+		if a.nodes[name] != nil {
+			a.mu.Unlock()
+			continue
 		}
+		node.Name = name
+		a.nodes[name] = node
+		a.mu.Unlock()
+
+		err = a.config.Cluster.AddNode(ctx, kube.Node(name, node.Hello, a.config.Node, metav1.Now()))
+		if err == nil {
+			return nil
+		}
+		a.mu.Lock()
+		delete(a.nodes, name)
+		node.Name = ""
+		a.mu.Unlock()
 		if !kube.IsTaken(err) {
 			break
 		}
 	}
-	return "", fmt.Errorf("registering the node: %w", err)
+	return fmt.Errorf("registering the node: %w", err)
 }
 
 // Leave removes a tab's node, and the pods on it, from the cluster.
@@ -340,13 +370,13 @@ func (a *Agent) Leave(node *Node) {
 	a.mu.Unlock()
 	node.lose()
 
-	// The pods' containers are stopped, each by its own run, and the
-	// node is deleted without waiting for them: the scheduler should
-	// stop choosing a node whose tab is gone as soon as it can.
+	// The node goes first and its pods after. A pod's controller makes
+	// a new pod the moment the old one is gone, and the scheduler must
+	// not find this node still there to put the new pod on.
+	a.removeNodeAndPods(context.WithoutCancel(a.ctx), node.Name)
 	for _, candidate := range running {
 		candidate.cancel()
 	}
-	a.removeNodeAndPods(context.WithoutCancel(a.ctx), node.Name)
 	a.log.Printf("node %s left; %d nodes", node.Name, count)
 }
 
@@ -376,8 +406,8 @@ func (a *Agent) removeAll() {
 func (a *Agent) renew(ctx context.Context) {
 	a.mu.Lock()
 	names := make([]string, 0, len(a.nodes))
-	for name, node := range a.nodes {
-		if node.Name != "" {
+	for name := range a.nodes {
+		if !strings.HasPrefix(name, placeholderPrefix) {
 			names = append(names, name)
 		}
 	}
@@ -438,8 +468,8 @@ func (a *Agent) Snapshot() View {
 	defer a.mu.Unlock()
 
 	view := View{Nodes: []NodeView{}, Pods: len(a.runs), MaxNodes: a.config.MaxNodes, PeakNodes: a.peakNodes}
-	for _, node := range a.nodes {
-		if node.Name == "" {
+	for name, node := range a.nodes {
+		if strings.HasPrefix(name, placeholderPrefix) {
 			continue
 		}
 		entry := NodeView{
