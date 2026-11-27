@@ -3,7 +3,7 @@
    rendered a tile. */
 .picture {
   display: grid;
-  grid-template-columns: minmax(0, 250px) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 230px) minmax(0, 1fr);
   gap: 16px;
   align-items: start;
 }
@@ -39,6 +39,12 @@
 
 .picture-side p {
   margin: 0 0 10px;
+}
+
+/* The button's words stay on one line, whatever they are at the
+   moment. */
+#paint {
+  white-space: nowrap;
 }
 
 /* The devices, each with how many tiles the device rendered. Each is
