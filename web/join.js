@@ -6,6 +6,11 @@
 // is a frame on a page tabc serves, which boots Linux in the frame and
 // runs the pod's program there. Closing the tab closes the socket, and
 // the agent takes the node out of the cluster.
+//
+// A node also sees what it has done, can send a request to its own pod,
+// and, in a pod that allows one, can open a shell.
+
+import { duration } from "./format.js";
 
 // Where the agent listens for tabs, beside this page.
 const SOCKET_PATH = "ws";
@@ -54,6 +59,41 @@ const REJOIN_DELAY_MS = 500;
 const RETRY_FIRST_MS = 2000;
 const RETRY_MOST_MS = 30000;
 
+// The exposed Service this page asks its own pod through
+// (examples/counter.yaml), and what the page asks of the pod: an answer
+// to a visit, and how many visits the pod has answered.
+const APP = "counter";
+const ASK_PATH = "json";
+const TALLY_PATH = "tally";
+
+// How often the page asks its pod for the tally: often until the pod
+// first answers, which is when its program has started, and seldom
+// after. And how often the node's age on the page is written again.
+const TALLY_FIRST_MS = 3000;
+const TALLY_EVERY_MS = 15000;
+const AGE_EVERY_MS = 1000;
+const MS_PER_SECOND = 1000;
+
+// Where the agent gives a tab a shell in one of its containers, and
+// the files of the terminal the shell is shown on, which a container's
+// page has too and are fetched from beside it.
+const SHELL_PATH = "shells/";
+const TERMINAL_STYLE = "xterm/xterm.css";
+const TERMINAL_SCRIPTS = ["xterm/xterm.js", "xterm/addon-fit.js"];
+const TERMINAL_OPTIONS = Object.freeze({
+  cursorBlink: true,
+  fontSize: 13,
+  fontFamily: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
+});
+
+// The annotation a pod allows a shell with (internal/kube/shell.go),
+// which the page names on a pod that has none.
+const SHELL_ANNOTATION = "tabernetes.dev/shell";
+
+// What the shell's button says.
+const SHELL_OPEN = "Open a shell";
+const SHELL_CLOSE = "Close the shell";
+
 const nameElement = document.getElementById("name");
 const statusElement = document.getElementById("status");
 const podsElement = document.getElementById("pods");
@@ -62,6 +102,11 @@ const leaveButton = document.getElementById("leave");
 const rejoinButton = document.getElementById("rejoin");
 const explainElement = document.getElementById("explain");
 const watchElement = document.getElementById("watch");
+const mineElement = document.getElementById("mine");
+const ageElement = document.getElementById("tally-age");
+const answeredElement = document.getElementById("tally-answered");
+const askButton = document.getElementById("ask-mine");
+const askAnswer = document.getElementById("ask-mine-answer");
 
 // The socket while the tab is a node, the containers shown by id, the
 // state the status line shows, and the lock that keeps the screen on.
@@ -69,6 +114,15 @@ let socket = null;
 const frames = new Map();
 let state = State.JOINING;
 let wakeLock = null;
+
+// The node's name and when the tab became the node, while it is one,
+// and the timer of the next question about the tally.
+let nodeName = "";
+let joinedAt = 0;
+let tallyTimer = null;
+
+// The terminal's files, once they have been asked for.
+let terminalLoaded = null;
 
 // Whether the person asked to leave, the wait before the next try at
 // joining again, and the timer of that try.
@@ -208,40 +262,226 @@ async function stayAwake() {
   }
 }
 
-// Show a container: a frame on the container's page.
+// An element with a class and, when given, text.
+function make(tag, className, text) {
+  const element = document.createElement(tag);
+  element.className = className;
+  if (text !== undefined) {
+    element.textContent = text;
+  }
+  return element;
+}
+
+// One part of a pod's card: a line that names the part and the kubectl
+// command a real node would show the same thing for.
+function part(name, what, command) {
+  const element = make("div", "part");
+  const label = make("div", "label");
+  label.append(make("b", "", name), make("span", "", what), make("code", "mono", command));
+  element.append(label);
+  return { element, label };
+}
+
+// Fetch the terminal's files, once: a style sheet and two scripts that
+// put Terminal and FitAddon on the page. A container's page has them,
+// so they are asked for from beside one.
+function loadTerminal(base) {
+  if (terminalLoaded !== null) {
+    return terminalLoaded;
+  }
+  const style = document.createElement("link");
+  style.rel = "stylesheet";
+  style.href = base + TERMINAL_STYLE;
+  document.head.append(style);
+
+  // One script after the other: the second adds to what the first made.
+  terminalLoaded = TERMINAL_SCRIPTS.reduce(
+    (before, file) =>
+      before.then(
+        () =>
+          new Promise((resolve, reject) => {
+            const script = document.createElement("script");
+            script.src = base + file;
+            script.addEventListener("load", resolve);
+            script.addEventListener("error", reject);
+            document.head.append(script);
+          }),
+      ),
+    Promise.resolve(),
+  );
+  terminalLoaded.catch(() => {
+    terminalLoaded = null;
+  });
+  return terminalLoaded;
+}
+
+// A shell's part of a pod's card, for a pod that allows one: a button
+// that opens a terminal on a second program in the pod's container.
+// The agent starts the program with `tabc exec` and carries what is
+// typed and printed over a socket, which is what a kubelet does for
+// `kubectl exec`.
+function shellPart(message, podName) {
+  const { element, label } = part(
+    "Shell",
+    "a second program in the pod:",
+    `kubectl exec -it ${podName} -- sh`,
+  );
+  const button = make("button", "button quiet", SHELL_OPEN);
+  const screen = make("div", "terminal");
+  const note = make("p", "note");
+  screen.hidden = true;
+  note.hidden = true;
+  label.append(button);
+  element.append(screen, note);
+
+  const shell = {
+    id: message.id,
+    path: message.path,
+    button,
+    screen,
+    note,
+    socket: null,
+    terminal: null,
+    watcher: null,
+  };
+  button.addEventListener("click", () => {
+    if (shell.socket !== null) {
+      shell.socket.close();
+      return;
+    }
+    openShell(shell);
+  });
+  return { element, shell };
+}
+
+// Say something under a shell's terminal, or nothing.
+function shellNote(shell, text) {
+  shell.note.textContent = text;
+  shell.note.hidden = text === "";
+}
+
+// Open a pod's shell: a terminal on the page, and a socket to the agent
+// that carries the terminal's keys one way and the program's output
+// the other.
+async function openShell(shell) {
+  shell.button.disabled = true;
+  shellNote(shell, "");
+  try {
+    await loadTerminal(shell.path);
+  } catch {
+    shell.button.disabled = false;
+    shellNote(shell, "The terminal could not be loaded.");
+    return;
+  }
+
+  const terminal = new window.Terminal(TERMINAL_OPTIONS);
+  const fitter = new window.FitAddon.FitAddon();
+  terminal.loadAddon(fitter);
+  shell.screen.hidden = false;
+  terminal.open(shell.screen);
+  fitter.fit();
+  shell.terminal = terminal;
+
+  const address = new URL(SHELL_PATH + encodeURIComponent(shell.id), location.href);
+  address.protocol = address.protocol.replace("http", "ws");
+  const socket = new WebSocket(address);
+  socket.binaryType = "arraybuffer";
+  shell.socket = socket;
+
+  // The agent is told the terminal's size first, and again whenever
+  // the size changes. Keys go as bytes, sizes as text.
+  const encoder = new TextEncoder();
+  socket.addEventListener("open", () => {
+    socket.send(JSON.stringify({ rows: terminal.rows, cols: terminal.cols }));
+    shell.button.textContent = SHELL_CLOSE;
+    shell.button.disabled = false;
+    terminal.focus();
+  });
+  terminal.onData((keys) => {
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(encoder.encode(keys));
+    }
+  });
+  terminal.onResize((size) => {
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ rows: size.rows, cols: size.cols }));
+    }
+  });
+  socket.addEventListener("message", (event) => terminal.write(new Uint8Array(event.data)));
+
+  // The agent says why as it closes the socket: the program ended, the
+  // shell sat idle, or there was no shell to give.
+  socket.addEventListener("close", (event) => {
+    closeShell(shell, event.reason || "The shell closed.");
+  });
+
+  shell.watcher = new ResizeObserver(() => fitter.fit());
+  shell.watcher.observe(shell.screen);
+}
+
+// Put a shell's part back as it was before the shell was opened, with
+// a word on why the shell closed.
+function closeShell(shell, reason) {
+  shell.watcher?.disconnect();
+  shell.terminal?.dispose();
+  shell.watcher = null;
+  shell.terminal = null;
+  shell.socket = null;
+  shell.screen.hidden = true;
+  shell.button.textContent = SHELL_OPEN;
+  shell.button.disabled = false;
+  shellNote(shell, reason);
+}
+
+// Show a container: a frame on the container's page, which is the
+// program's terminal, and under the frame a shell where the pod allows
+// one.
 function run(message) {
   stop(message);
 
-  const pod = document.createElement("div");
-  pod.className = "pod";
+  const pod = make("div", "pod");
+  const title = make("div", "title");
+  title.append(make("span", "mono", message.pod), make("span", "image mono", message.image));
 
-  const title = document.createElement("div");
-  title.className = "title";
-  const name = document.createElement("span");
-  name.className = "mono";
-  name.textContent = message.pod;
-  const image = document.createElement("span");
-  image.className = "image mono";
-  image.textContent = message.image;
-  title.append(name, image);
-
+  // The pod's name without its namespace, as kubectl takes one.
+  const podName = message.pod.split("/").pop();
+  const logs = part("Logs", "what the pod's program prints:", `kubectl logs ${podName}`);
   const frame = document.createElement("iframe");
   frame.src = message.path;
   frame.title = message.pod;
-  pod.append(title, frame);
+  logs.element.append(frame);
+  pod.append(title, logs.element);
+
+  // The shell, or a line that says why there is none.
+  let shell = null;
+  if (message.shell) {
+    const made = shellPart(message, podName);
+    shell = made.shell;
+    pod.append(made.element);
+  } else {
+    pod.append(
+      part(
+        "Shell",
+        "not allowed by this pod. A pod allows one with the annotation",
+        SHELL_ANNOTATION,
+      ).element,
+    );
+  }
 
   podsElement.append(pod);
-  frames.set(message.id, pod);
+  frames.set(message.id, { pod, shell });
   show(State.RUNNING, `Running ${message.pod}. The Linux below is booted in this tab.`);
+  askTally(TALLY_FIRST_MS);
 }
 
 // Remove a container's frame.
 function stop(message) {
-  const pod = frames.get(message.id);
-  if (!pod) {
+  const shown = frames.get(message.id);
+  if (!shown) {
     return;
   }
-  pod.remove();
+  shown.shell?.socket?.close();
+  shown.pod.remove();
   frames.delete(message.id);
   if (frames.size === 0 && state === State.RUNNING) {
     show(State.IDLE, "Ready. Waiting for the scheduler to send a pod.");
@@ -250,10 +490,81 @@ function stop(message) {
 
 // Remove every frame: the tab is no longer a node.
 function clear() {
-  for (const pod of frames.values()) {
-    pod.remove();
+  for (const shown of frames.values()) {
+    shown.shell?.socket?.close();
+    shown.pod.remove();
   }
   frames.clear();
+  forgetTally();
+}
+
+// The address of something asked of this node's own pod, through the
+// exposed Service the pod is behind.
+function ofMyPod(path) {
+  return `nodes/${encodeURIComponent(nodeName)}/apps/${APP}/${path}`;
+}
+
+// Ask this node's pod how many requests the pod has answered, and ask
+// again later. The first answer is what shows the tally and the button:
+// a cluster without the demo has no such pod, and the page then shows
+// neither.
+function askTally(after) {
+  clearTimeout(tallyTimer);
+  tallyTimer = setTimeout(async () => {
+    let next = mineElement.hidden ? TALLY_FIRST_MS : TALLY_EVERY_MS;
+    if (document.visibilityState === "visible" && frames.size > 0) {
+      try {
+        const response = await fetch(ofMyPod(TALLY_PATH), { cache: "no-store" });
+        if (response.ok) {
+          const tally = await response.json();
+          answeredElement.textContent = String(tally.answered ?? 0);
+          mineElement.hidden = false;
+          next = TALLY_EVERY_MS;
+        }
+      } catch {
+        // The pod is not up yet, or the network dropped: the next
+        // question finds out.
+      }
+    }
+    if (socket !== null) {
+      askTally(next);
+    }
+  }, after);
+}
+
+// Stop asking for the tally and take it off the page: the tab is no
+// longer a node.
+function forgetTally() {
+  clearTimeout(tallyTimer);
+  mineElement.hidden = true;
+  askAnswer.textContent = "";
+}
+
+// Send a request to this node's own pod, and say what the pod answered.
+// The pod's terminal below prints a line for the same request.
+async function askMine() {
+  askButton.disabled = true;
+  askAnswer.textContent = "asking";
+  try {
+    const response = await fetch(ofMyPod(ASK_PATH), { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error((await response.text()).trim() || String(response.status));
+    }
+    const answer = await response.json();
+    askAnswer.textContent = `visit ${answer.visit}, answered on this device`;
+  } catch (error) {
+    askAnswer.textContent = `no answer: ${error.message}`;
+  }
+  askButton.disabled = false;
+  askTally(0);
+}
+
+// Write how long the tab has been a node.
+function showAge() {
+  if (joinedAt === 0) {
+    return;
+  }
+  ageElement.textContent = duration((Date.now() - joinedAt) / MS_PER_SECOND);
 }
 
 // Become a node.
@@ -284,6 +595,9 @@ async function join() {
       case FromAgent.JOINED:
         retryDelay = RETRY_FIRST_MS;
         nameElement.textContent = message.node;
+        nodeName = message.node;
+        joinedAt = Date.now();
+        showAge();
         remember(message.node);
         watchElement.href = `/#node=${encodeURIComponent(message.node)}`;
         document.title = `${message.node} · tabernetes`;
@@ -316,6 +630,7 @@ async function join() {
       return;
     }
     socket = null;
+    joinedAt = 0;
     clear();
     if (state === State.REFUSED) {
       return;
@@ -353,6 +668,8 @@ function leave() {
 }
 
 leaveButton.addEventListener("click", leave);
+askButton.addEventListener("click", askMine);
+setInterval(showAge, AGE_EVERY_MS);
 rejoinButton.addEventListener("click", join);
 
 // A tab that is being closed says so, which is faster than the agent

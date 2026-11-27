@@ -26,6 +26,23 @@
         <a id="watch" href="/">See this node on the cluster's page.</a>
       </p>
 
+      <section class="mine" id="mine" hidden>
+        <dl class="tally">
+          <div>
+            <dt>a node for</dt>
+            <dd id="tally-age">0s</dd>
+          </div>
+          <div>
+            <dt>requests answered</dt>
+            <dd id="tally-answered">0</dd>
+          </div>
+        </dl>
+        <div class="ask-mine">
+          <button class="button" id="ask-mine">Send a request to my pod</button>
+          <span class="small" id="ask-mine-answer" aria-live="polite"></span>
+        </div>
+      </section>
+
       <section class="pods" id="pods"></section>
 
       <footer class="node-foot">

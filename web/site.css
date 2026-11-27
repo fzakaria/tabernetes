@@ -916,6 +916,88 @@ body.node main {
   border: 0;
 }
 
+/* A pod's two parts: what the program prints, and a shell beside it. */
+.pod .part {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+}
+
+.pod .part + .part {
+  border-top: 1px solid var(--line);
+  flex: 0 0 auto;
+}
+
+.pod .label {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pod .label b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.pod .label .button {
+  margin-left: auto;
+  padding: 5px 12px;
+  font-size: 13px;
+}
+
+.pod .terminal {
+  height: 300px;
+  padding: 6px 8px;
+  background: #000;
+}
+
+.pod .note {
+  margin: 0;
+  padding: 0 12px 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* What this node has done, and the button that asks its own pod. */
+.mine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 24px;
+  margin: 0 0 16px;
+}
+
+.mine .tally {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 28px;
+  margin: 0;
+}
+
+.mine .tally dt {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.mine .tally dd {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.mine .ask-mine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
 footer.node-foot {
   display: flex;
   justify-content: space-between;
