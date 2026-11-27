@@ -18,6 +18,8 @@ ExecStart=/opt/tabernetes/bin/tabernetes \
   --public-url ${PUBLIC_URL} \
   --max-nodes ${MAX_NODES} \
   --max-nodes-per-address ${MAX_NODES_PER_ADDRESS} \
+  --resident-word-file /etc/tabernetes/resident-word \
+  --unkernel-mirror ${UNKERNEL_MIRROR} \
   --zone ${ZONE} \
   --expose ${EXPOSE}
 Restart=always

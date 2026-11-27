@@ -1,8 +1,9 @@
 # `nix run .#deploy -- <ssh host> <public address>`: copy the bundle to
 # a machine and run the machine's own setup with it.
 #
-# MAX_NODES, MAX_NODES_PER_ADDRESS, ZONE and DEMO in the environment are
-# passed on to deploy/setup.sh, which says what each is.
+# MAX_NODES, MAX_NODES_PER_ADDRESS, RESIDENTS, ZONE and DEMO in the
+# environment are passed on to deploy/setup.sh, which says what each
+# is.
 { pkgs, bundle }:
 pkgs.writeShellApplication {
   name = "tabernetes-deploy";
@@ -28,8 +29,9 @@ pkgs.writeShellApplication {
     # command's own.
     # shellcheck disable=SC2029
     ssh "$host" sudo \
-      MAX_NODES="''${MAX_NODES:-100}" \
+      MAX_NODES="''${MAX_NODES:-1000}" \
       MAX_NODES_PER_ADDRESS="''${MAX_NODES_PER_ADDRESS:-4}" \
+      RESIDENTS="''${RESIDENTS:-0}" \
       ZONE="''${ZONE:-America/Los_Angeles}" \
       DEMO="''${DEMO:-yes}" \
       /opt/tabernetes/deploy/setup.sh "$address"

@@ -1,15 +1,21 @@
-# A pod for every tab there is room for, so that every phone in a room
-# has something to show. The Deployment asks for as many pods as the
-# cluster takes nodes; the ones with no tab to run in wait as Pending,
-# and each tab that joins takes one.
+# A pod for every tab, so that every phone in a room has something to
+# show. A DaemonSet makes one pod for each node its pods could run on,
+# and takes the pod away with the node: here, one for each tab.
 #
 #   kubectl apply -f everywhere.yaml
+#
+# The pod names the tabs' label and tolerates their taint itself. The
+# RuntimeClass would add both when the pod is made, which is too late
+# for the DaemonSet: it decides which nodes get a pod from the pod's
+# template, and would make one for the cluster's own machine too.
+#
+# A tab whose one place went to a pod that comes first (counter.yaml)
+# has its pod of this DaemonSet waiting as Pending.
 apiVersion: apps/v1
-kind: Deployment
+kind: DaemonSet
 metadata:
   name: everywhere
 spec:
-  replicas: 100
   selector:
     matchLabels:
       app: everywhere
@@ -19,6 +25,12 @@ spec:
         app: everywhere
     spec:
       runtimeClassName: tab
+      nodeSelector:
+        tabernetes.dev/tab: "true"
+      tolerations:
+        - key: tabernetes.dev/tab
+          operator: Exists
+          effect: NoSchedule
       containers:
         - name: everywhere
           image: alpine:3.22
