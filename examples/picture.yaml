@@ -15,7 +15,7 @@
 #
 # Nobody says what is rendered: the web servers have a list of
 # pictures and the painter goes round it. One picture is rendered at a
-# time, and the tabs are left alone for a minute after each, so the
+# time, and the tabs are left alone for 20 seconds after each, so the
 # button is no way to keep strangers' phones busy.
 apiVersion: v1
 kind: Service
@@ -71,7 +71,7 @@ data:
     # take in all, and how long the tabs are left alone after a picture.
     TILE_SECONDS = 8
     PICTURE_SECONDS = 90
-    REST_SECONDS = 60
+    REST_SECONDS = 20
 
     # The wait before the tabs are looked up again when a round of
     # asking left tiles unrendered.

@@ -213,11 +213,11 @@ renders more tiles than a slow one. A pod that fails or takes more than
 after 90 seconds is left as it is.
 
 Nobody says what is rendered: the pods have a list of four pictures and
-the painter goes round it. One picture is rendered at a time, and the
-painter starts no other for a minute after, so the button is no way to
-keep strangers' phones busy. The page reads the painter once a second
-while a picture is rendered and every ten seconds otherwise, asking
-only for the tiles it does not have.
+the painter goes round it. One picture is rendered at a time, whoever
+asks, and the painter starts no other for 20 seconds after, so the
+button is no way to keep strangers' phones busy. The page reads the
+painter once a second while a picture is rendered and every ten seconds
+otherwise, asking only for the tiles it does not have.
 
 The agent knows none of this. To the agent the painter is one more
 exposed Service.
@@ -300,8 +300,12 @@ cut short there by a deploy, not by the machine.
 | a node tab's memory in the browser, 128 MiB guest | 214 MB       |
 | a first join's download from the machine, gzipped | about 0.5 MB |
 | a first join's download from jsDelivr             | 4.5 MB       |
+| a picture of 64 tiles, by the machine's 4 seeds   | 18 to 20 s   |
+| the same, by 3 seeds and a visitor's laptop       | 12 to 15 s   |
 
-k3s itself is 650 MB of the 825.
+k3s itself is 650 MB of the 825. The pictures are from 2026-11-27. The
+seeds render on the machine's own two CPUs, which they fill while a
+picture lasts, at a lowered priority.
 
 Not measured: phones in number, more than 307 nodes, a pod doing real
 work on every node at once.
