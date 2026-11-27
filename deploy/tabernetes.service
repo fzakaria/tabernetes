@@ -1,4 +1,4 @@
-# The agent: the site, and the kubelet of every tab. PUBLIC_URL is
+# The agent: the site, and the kubelet of every tab. The variables are
 # written by setup.sh to /etc/tabernetes/env.
 [Unit]
 Description=tabernetes, the kubelet of a cluster whose nodes are browser tabs
@@ -16,7 +16,8 @@ ExecStart=/opt/tabernetes/bin/tabernetes \
   --cni-config /opt/tabernetes/deploy/tabs.json \
   --host-path-root /var/lib/tabernetes/data \
   --public-url ${PUBLIC_URL} \
-  --max-nodes ${MAX_NODES}
+  --max-nodes ${MAX_NODES} \
+  --max-nodes-per-address ${MAX_NODES_PER_ADDRESS}
 Restart=always
 RestartSec=2
 # Every pod is two tabc processes, each with a handful of files open.

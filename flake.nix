@@ -40,6 +40,8 @@
       apps.${system} = {
         # copy the bundle to a machine and set the machine up:
         # `nix run .#deploy -- tabernetes.exe.xyz https://tabernetes.exe.xyz`
+        # MAX_NODES and MAX_NODES_PER_ADDRESS in the environment set
+        # the agent's limits (deploy/setup.sh).
         deploy = {
           type = "app";
           program = "${
@@ -66,7 +68,10 @@
                 # The address is expanded here, on purpose: it is this
                 # command's own argument.
                 # shellcheck disable=SC2029
-                ssh "$host" sudo /opt/tabernetes/deploy/setup.sh "$address"
+                ssh "$host" sudo \
+                  MAX_NODES="''${MAX_NODES:-100}" \
+                  MAX_NODES_PER_ADDRESS="''${MAX_NODES_PER_ADDRESS:-4}" \
+                  /opt/tabernetes/deploy/setup.sh "$address"
               '';
             }
           }/bin/tabernetes-deploy";
