@@ -169,12 +169,7 @@ func (a *Agent) start(pod *corev1.Pod, node *Node) {
 	started.carried = func(down, up int64) {
 		started.down.Add(down)
 		started.up.Add(up)
-
-		// What a resident carries never leaves the machine, and is in
-		// no total.
-		if node.Origin == tab.Visitor {
-			a.ledger.carried(down + up)
-		}
+		a.ledger.carried(down + up)
 	}
 	a.runs[pod.UID] = started
 	a.containers[started.id] = started
@@ -446,14 +441,8 @@ func (a *Agent) runContainer(ctx context.Context, r *run, sandbox *runtime.Sandb
 	boot := time.Since(told)
 	r.show(sandbox.IP, true, boot)
 	defer r.show(sandbox.IP, false, boot)
-	podName := r.pod.Namespace + "/" + r.pod.Name
-	if r.node.Origin == tab.Visitor {
-		a.ledger.started(r.node.Name, podName,
-			tab.LabelValue(r.node.Hello.Platform), tab.LabelValue(r.node.Hello.Model), boot, time.Now())
-	} else {
-		// A resident's boot says nothing of anyone's phone: see Join.
-		a.ledger.noted(Event{At: time.Now(), Kind: EventStart, Node: r.node.Name, Pod: podName, Seconds: boot.Seconds()})
-	}
+	a.ledger.started(r.node.Name, r.pod.Namespace+"/"+r.pod.Name,
+		tab.LabelValue(r.node.Hello.Platform), tab.LabelValue(r.node.Hello.Model), boot, time.Now())
 
 	select {
 	case <-container.Done():

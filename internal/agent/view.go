@@ -60,10 +60,7 @@ type NodeView struct {
 	Longitude float64   `json:"longitude,omitempty"`
 	Threads   int       `json:"threads"`
 	Joined    time.Time `json:"joined"`
-	// Resident is whether the node is a browser the cluster's own
-	// machine keeps open, and not a visitor's.
-	Resident bool      `json:"resident"`
-	Pods     []PodView `json:"pods"`
+	Pods      []PodView `json:"pods"`
 }
 
 // ServiceView is a Service as the site shows one: its name, as
@@ -161,7 +158,6 @@ func (a *Agent) Snapshot() View {
 			Longitude: node.Place.Longitude,
 			Threads:   node.Hello.PlainThreads(),
 			Joined:    node.Joined,
-			Resident:  node.Origin == tab.Resident,
 			Pods:      []PodView{},
 		}
 		for _, running := range a.runs {

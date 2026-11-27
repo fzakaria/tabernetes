@@ -19,7 +19,6 @@ const (
 	LabelPlatform = "tabernetes.dev/platform"
 	LabelBrowser  = "tabernetes.dev/browser"
 	LabelModel    = "tabernetes.dev/model"
-	LabelResident = "tabernetes.dev/resident"
 	LabelValueTab = "true"
 	TaintTab      = "tabernetes.dev/tab"
 )
@@ -62,10 +61,9 @@ type NodeConfig struct {
 }
 
 // Node returns the Node a tab becomes: named, labelled with what the
-// browser said the tab runs on and with being a resident if the tab is
-// one, tainted so that only pods asking for a tab land on the node, and
-// ready.
-func Node(name string, hello tab.Hello, origin tab.Origin, config NodeConfig, now metav1.Time) *corev1.Node {
+// browser said the tab runs on, tainted so that only pods asking for a
+// tab land on the node, and ready.
+func Node(name string, hello tab.Hello, config NodeConfig, now metav1.Time) *corev1.Node {
 	resources := corev1.ResourceList{
 		corev1.ResourceCPU:    config.CPU,
 		corev1.ResourceMemory: config.Memory,
@@ -93,9 +91,6 @@ func Node(name string, hello tab.Hello, origin tab.Origin, config NodeConfig, no
 		LabelPlatform:          tab.LabelValue(hello.Platform),
 		LabelBrowser:           tab.LabelValue(hello.Browser),
 		LabelModel:             tab.LabelValue(hello.Model),
-	}
-	if origin == tab.Resident {
-		labels[LabelResident] = LabelValueTab
 	}
 
 	return &corev1.Node{

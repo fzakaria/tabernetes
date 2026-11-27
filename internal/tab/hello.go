@@ -25,30 +25,17 @@ type Hello struct {
 	// Touch is whether the device's pointer is a finger.
 	Touch bool `json:"touch"`
 	// Zone is the browser's time zone, such as "Europe/Lisbon". The site
-	// puts a node on its map by the zone's city, which says roughly
-	// where a node is without the agent looking up anyone's address.
+	// puts a node on its map by the zone's city when the agent cannot
+	// tell where the node's address is.
 	Zone string `json:"zone"`
-	// Resident is the word the cluster's own machine gives the pages it
-	// keeps open, which is how the agent tells a resident from a
-	// visitor. A visitor's page sends none.
-	Resident string `json:"resident,omitempty"`
+	// Suffix is the end of the name the tab had when it was last a
+	// node, which it asks to have again: a tab that lost its place to a
+	// restart of the agent comes back as the node it was.
+	Suffix string `json:"suffix,omitempty"`
 }
 
-// Origin is whose browser a tab is in.
-type Origin int
-
-const (
-	// Visitor: someone's browser, somewhere.
-	Visitor Origin = iota
-	// Resident: a browser the cluster's own machine keeps open, so that
-	// the cluster has nodes when nobody is visiting.
-	Resident
-)
-
-// residentName is what every resident's name starts with: a resident
-// is named for what it is and not for its browser, so that nobody
-// takes one for a visitor.
-const residentName = "resident"
+// SuffixLength is how many characters the end of a node's name has.
+const SuffixLength = 4
 
 // The limits of a name: a DNS label's length, and how much of it the
 // device's own words may take, which leaves room for the suffix.
@@ -80,16 +67,6 @@ func (h Hello) NodeName(suffix string) string {
 		base = fallbackName
 	}
 	return base + "-" + suffix
-}
-
-// NodeNameFor returns the name of a node of an origin: a visitor's is
-// made from what its browser said (NodeName), and a resident's says
-// that the node is a resident.
-func (h Hello) NodeNameFor(origin Origin, suffix string) string {
-	if origin == Resident {
-		return residentName + "-" + suffix
-	}
-	return h.NodeName(suffix)
 }
 
 // Describe returns a line for the node's OS image: the browser and the
@@ -213,6 +190,23 @@ func (h Hello) PlainZone() string {
 		}
 	}
 	return zone
+}
+
+// PlainSuffix returns the suffix the tab asks for if it is one the
+// agent could have made: SuffixLength characters, each a digit or a
+// lowercase letter up to f. Anything else is no suffix.
+func (h Hello) PlainSuffix() string {
+	if len(h.Suffix) != SuffixLength {
+		return ""
+	}
+	for _, char := range h.Suffix {
+		isDigit := char >= '0' && char <= '9'
+		isHexLetter := char >= 'a' && char <= 'f'
+		if !isDigit && !isHexLetter {
+			return ""
+		}
+	}
+	return h.Suffix
 }
 
 // PlainThreads returns how many threads the tab's device has, or none

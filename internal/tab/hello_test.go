@@ -26,16 +26,18 @@ func TestNodeName(t *testing.T) {
 	}
 }
 
-// TestNodeNameFor checks that a resident is named a resident whatever
-// its browser says it is, and that a visitor keeps the name made from
-// its browser's words.
-func TestNodeNameFor(t *testing.T) {
-	hello := Hello{Model: "Pixel 9 Pro", Platform: "Android", Browser: "Chrome"}
-	if got := hello.NodeNameFor(Resident, "3fa2"); got != "resident-3fa2" {
-		t.Errorf("resident named %q", got)
+// TestPlainSuffix checks that a tab gets the end of its name back only
+// when what it asks for is what the agent would have made: four
+// characters, each a digit or a lowercase letter up to f. Anything
+// else, which may be anything a stranger typed, is no suffix.
+func TestPlainSuffix(t *testing.T) {
+	if got := (Hello{Suffix: "3fa2"}).PlainSuffix(); got != "3fa2" {
+		t.Errorf("a suffix the agent could have made came back as %q", got)
 	}
-	if got := hello.NodeNameFor(Visitor, "3fa2"); got != "pixel-9-pro-3fa2" {
-		t.Errorf("visitor named %q", got)
+	for _, hostile := range []string{"", "3fa", "3fa2b", "3FA2", "3f.2", "../x", "zzzz"} {
+		if got := (Hello{Suffix: hostile}).PlainSuffix(); got != "" {
+			t.Errorf("%q was taken as the suffix %q", hostile, got)
+		}
 	}
 }
 

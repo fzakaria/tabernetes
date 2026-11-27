@@ -9,7 +9,6 @@ package agent
 import (
 	"context"
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -38,8 +37,8 @@ const renewEvery = 20 * time.Second
 // to tell apart devices of one model, and a container's id, which is
 // also the secret in the address of the container's page.
 const (
-	nodeSuffixBytes  = 2
 	containerIDBytes = 16
+	hexPerByte       = 2
 )
 
 // nameAttempts is how many suffixes are tried for a node before giving
@@ -109,11 +108,6 @@ type Config struct {
 	// map. Nil means nobody is looked up, and the map goes by each
 	// browser's time zone.
 	Places *geo.Book
-	// ResidentWord is the word a resident's page says (tab.Hello). A
-	// tab that says it is a resident: not held to an address's limit,
-	// and the first to go when the cluster is full. Empty means the
-	// cluster has no residents.
-	ResidentWord string
 	// RuntimeClass is the name of the RuntimeClass whose pods run in
 	// tabs. A pod of that class bound to a node that is no tab of this
 	// agent's is bound to a tab that has gone.
@@ -202,9 +196,6 @@ type Node struct {
 	Address string
 	// Joined is when the tab became a node.
 	Joined time.Time
-	// Origin is whose browser the tab is in: a visitor's, or the
-	// cluster's own machine's.
-	Origin tab.Origin
 	// Place is roughly where the tab's address is, and Placed whether
 	// that is known.
 	Place  geo.Place
@@ -394,44 +385,6 @@ func (a *Agent) room() int {
 	return max(0, room)
 }
 
-// originOf returns whose browser a tab is in: the machine's own, for a
-// tab that says the residents' word, and a visitor's otherwise.
-func (a *Agent) originOf(hello tab.Hello) tab.Origin {
-	word := a.config.ResidentWord
-	if word == "" || subtle.ConstantTimeCompare([]byte(hello.Resident), []byte(word)) != 1 {
-		return tab.Visitor
-	}
-	return tab.Resident
-}
-
-// newestResident returns the resident that joined last and has not
-// been given up, or nil when there is none. The caller holds the
-// agent's lock.
-func (a *Agent) newestResident() *Node {
-	var newest *Node
-	for _, node := range a.nodes {
-		if node.Origin != tab.Resident || node.isLost() {
-			continue
-		}
-		if newest == nil || node.Joined.After(newest.Joined) {
-			newest = node
-		}
-	}
-	return newest
-}
-
-// visitors returns how many named nodes are visitors'. The caller
-// holds the agent's lock.
-func (a *Agent) visitors() int {
-	count := 0
-	for name, node := range a.nodes {
-		if node.Origin == tab.Visitor && !strings.HasPrefix(name, placeholderPrefix) {
-			count++
-		}
-	}
-	return count
-}
-
 // saveLedger writes the ledger's totals to their file.
 func (a *Agent) saveLedger() {
 	if err := a.ledger.save(a.config.StateDir); err != nil {
@@ -500,54 +453,31 @@ func (a *Agent) removeNodeAndPods(ctx context.Context, name string) {
 // Join makes a tab a node. The returned node's messages are for the
 // tab's page, and Leave is to be called when the page is gone.
 func (a *Agent) Join(ctx context.Context, hello tab.Hello, address string) (*Node, error) {
-	origin := a.originOf(hello)
-	if origin == tab.Resident {
-		// A resident is on the cluster's machine, which is where the
-		// site's map is to put it, whatever zone the machine's clock
-		// is set to.
-		hello.Zone = a.config.Zone
-	}
-
 	// A place is taken before the API server is asked, so that a crowd
 	// arriving at once cannot overshoot the limits.
 	a.mu.Lock()
-	refused := a.refusal()
-	if errors.Is(refused, ErrFull) && origin == tab.Visitor {
-		// A full cluster still has room for a visitor while a resident
-		// holds a place: residents are there so that the cluster is
-		// never empty, and are the first to go.
-		if resident := a.newestResident(); resident != nil {
-			resident.lose()
-			refused = nil
-		}
-	}
-	if refused != nil {
+	if refused := a.refusal(); refused != nil {
 		a.mu.Unlock()
 		return nil, refused
 	}
-	if origin == tab.Visitor {
-		here := 0
-		for _, node := range a.nodes {
-			if node.Origin == tab.Visitor && node.Address == address {
-				here++
-			}
+	here := 0
+	for _, node := range a.nodes {
+		if node.Address == address {
+			here++
 		}
-		if here >= a.config.MaxNodesPerAddress {
-			a.mu.Unlock()
-			return nil, ErrTooManyHere
-		}
+	}
+	if here >= a.config.MaxNodesPerAddress {
+		a.mu.Unlock()
+		return nil, ErrTooManyHere
 	}
 	node := &Node{
 		Hello:   hello,
 		Address: address,
 		Joined:  time.Now(),
-		Origin:  origin,
 		outbox:  make(chan Message, outboxSize),
 		lost:    make(chan struct{}),
 	}
-	if origin == tab.Visitor {
-		node.Place, node.Placed = a.config.Places.Lookup(address)
-	}
+	node.Place, node.Placed = a.config.Places.Lookup(address)
 
 	// The place is held under a name nothing else has, until the node's
 	// own name is known.
@@ -564,16 +494,9 @@ func (a *Agent) Join(ctx context.Context, hello tab.Hello, address string) (*Nod
 		return nil, err
 	}
 	count := a.named()
-	visitors := a.visitors()
 	a.mu.Unlock()
 
-	// The ledger's totals are of visitors. A resident is in the feed
-	// and in no total.
-	if origin == tab.Visitor {
-		a.ledger.joined(node.Name, visitors, node.Joined)
-	} else {
-		a.ledger.noted(Event{At: node.Joined, Kind: EventJoin, Node: node.Name})
-	}
+	a.ledger.joined(node.Name, count, node.Joined)
 	a.log.Printf("node %s joined from %s (%s); %d nodes", node.Name, address, hello.Describe(), count)
 	return node, nil
 }
@@ -608,7 +531,13 @@ func (a *Agent) register(ctx context.Context, node *Node) error {
 
 	var err error
 	for attempt := 0; attempt < nameAttempts; attempt++ {
-		name := node.Hello.NodeNameFor(node.Origin, randomHex(nodeSuffixBytes))
+		// The first try is for the name the tab had before, if the tab
+		// says what that was, and every other try for a new one.
+		suffix := node.Hello.PlainSuffix()
+		if attempt > 0 || suffix == "" {
+			suffix = randomHex(tab.SuffixLength / hexPerByte)
+		}
+		name := node.Hello.NodeName(suffix)
 		a.mu.Lock()
 		if a.nodes[name] != nil {
 			a.mu.Unlock()
@@ -618,7 +547,7 @@ func (a *Agent) register(ctx context.Context, node *Node) error {
 		a.nodes[name] = node
 		a.mu.Unlock()
 
-		err = a.config.Cluster.AddNode(ctx, kube.Node(name, node.Hello, node.Origin, a.config.Node, metav1.Now()))
+		err = a.config.Cluster.AddNode(ctx, kube.Node(name, node.Hello, a.config.Node, metav1.Now()))
 		if err == nil {
 			return nil
 		}
@@ -656,17 +585,8 @@ func (a *Agent) Leave(node *Node) {
 	a.mu.Unlock()
 	node.lose()
 
-	// The ledger's totals are of visitors: see Join.
 	now := time.Now()
-	lifetime := now.Sub(node.Joined)
-	if node.Origin == tab.Visitor {
-		a.ledger.left(node.Name, lifetime, moved, now)
-	} else {
-		a.ledger.noted(Event{At: now, Kind: EventLeave, Node: node.Name, Seconds: lifetime.Seconds(), Pods: len(moved)})
-		for _, pod := range moved {
-			a.ledger.noted(Event{At: now, Kind: EventMove, Node: node.Name, Pod: pod})
-		}
-	}
+	a.ledger.left(node.Name, now.Sub(node.Joined), moved, now)
 
 	// The node goes first and its pods after. A pod's controller makes
 	// a new pod the moment the old one is gone, and the scheduler must
@@ -752,16 +672,6 @@ func (n *Node) tell(message Message) {
 // lose marks the node as given up.
 func (n *Node) lose() {
 	n.loseOnce.Do(func() { close(n.lost) })
-}
-
-// isLost reports whether the node has been given up.
-func (n *Node) isLost() bool {
-	select {
-	case <-n.lost:
-		return true
-	default:
-		return false
-	}
 }
 
 // Counts returns how many nodes and pods there are.

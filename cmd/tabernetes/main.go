@@ -95,7 +95,6 @@ func run() error {
 		nodeCost      = flag.String("node-cost", "12Mi", "roughly what one node takes of the machine's memory, for the site's count of the places left")
 		busyAbove     = flag.Float64("busy-above", 0.9, "the part of its CPUs' time the machine may spend busy before tabs are asked to wait (0: never)")
 		startsAtOnce  = flag.Int("starts-at-once", 8, "how many pods may be at the machine's part of starting at once (0: any number)")
-		residentFile  = flag.String("resident-word-file", "", "a file that holds the word a resident's page says: a tab that says it is one of the machine's own browsers (default: no residents)")
 		geoDB         = flag.String("geo-db", "", "a database of where addresses are, in MaxMind's format, for the site's map (default: the map goes by time zones)")
 		mirror        = flag.String("unkernel-mirror", "", "an address that serves unkernel's published files, with {version} where the version goes; tabs fetch the kernel from there once it is seen to be the share's")
 		nodeMemory    = flag.String("node-memory", "256Mi", "the memory one tab offers")
@@ -161,17 +160,6 @@ func run() error {
 	}
 	logger.Printf("tabernetes %s: API server %s, tabc %s, reachable at %s", version, serverVersion, tabcVersion, *address)
 
-	// The residents' word comes from a file, since a command line is for
-	// every user of the machine to read.
-	residentWord := ""
-	if *residentFile != "" {
-		contents, err := os.ReadFile(*residentFile)
-		if err != nil {
-			return fmt.Errorf("--resident-word-file: %w", err)
-		}
-		residentWord = strings.TrimSpace(string(contents))
-	}
-
 	// Where addresses are, for the site's map. Without the database
 	// the map still has every node, by its time zone.
 	var places *geo.Book
@@ -209,7 +197,6 @@ func run() error {
 		NodeCost:           cost.Value(),
 		BusyAbove:          *busyAbove,
 		StartsAtOnce:       *startsAtOnce,
-		ResidentWord:       residentWord,
 		Places:             places,
 		RuntimeClass:       *runtimeClass,
 		StateDir:           *stateDir,

@@ -8,7 +8,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -20,11 +19,8 @@ import (
 	"github.com/fzakaria/tabernetes/internal/tab"
 )
 
-// The residents' word in these tests, and a gibibyte.
-const (
-	testWord = "the-residents-word"
-	gibibyte = int64(1) << 30
-)
+// A gibibyte.
+const gibibyte = int64(1) << 30
 
 // testAgent returns an agent over a stand-in for an API server, with
 // the settings a test gives on top of ones that turn nobody away.
@@ -41,8 +37,6 @@ func testAgentOver(t *testing.T, client kubernetes.Interface, change func(*Confi
 		Cluster:            kube.Over(client),
 		MaxNodes:           100,
 		MaxNodesPerAddress: 100,
-		ResidentWord:       testWord,
-		Zone:               "America/Los_Angeles",
 		StateDir:           t.TempDir(),
 		Log:                log.New(io.Discard, "", 0),
 	}
@@ -114,89 +108,27 @@ func TestJoinAskedToWaitWhenBusy(t *testing.T) {
 	}
 }
 
-// TestResident checks what the residents' word does for a tab that
-// says it: the node is named a resident, placed where the machine is,
-// labelled, and not counted against its address; and that a tab with
-// the wrong word is a visitor like any other.
-func TestResident(t *testing.T) {
-	client := fake.NewSimpleClientset()
-	agent := testAgentOver(t, client, func(config *Config) { config.MaxNodesPerAddress = 1 })
-	ctx := context.Background()
+// TestJoinKeepsItsName checks that a tab which says what its name
+// ended with gets that name again, and that a second tab which says
+// the same, while the first is still a node, gets another: by joining
+// twice with one suffix.
+func TestJoinKeepsItsName(t *testing.T) {
+	agent := testAgent(t, nil)
+	hello := tab.Hello{Model: "Pixel 9", Suffix: "3fa2"}
 
-	// Two residents from one address, where one visitor is the most.
-	for range 2 {
-		node, err := agent.Join(ctx, tab.Hello{Platform: "Linux", Zone: "UTC", Resident: testWord}, "127.0.0.1")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.HasPrefix(node.Name, "resident-") || node.Origin != tab.Resident {
-			t.Errorf("a resident is named %q, origin %v", node.Name, node.Origin)
-		}
-		if node.Hello.Zone != "America/Los_Angeles" {
-			t.Errorf("a resident is placed in %q", node.Hello.Zone)
-		}
-		made, err := client.CoreV1().Nodes().Get(ctx, node.Name, metav1.GetOptions{})
-		if err != nil || made.Labels[kube.LabelResident] != "true" {
-			t.Errorf("a resident's Node: %v, labels %v", err, made.GetLabels())
-		}
-	}
-
-	// The wrong word makes a visitor, who is held to the limit.
-	visitor, err := agent.Join(ctx, tab.Hello{Platform: "Linux", Resident: "a guess"}, "127.0.0.1")
+	first, err := agent.Join(context.Background(), hello, "198.51.100.1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if visitor.Origin != tab.Visitor || strings.HasPrefix(visitor.Name, "resident-") {
-		t.Errorf("a tab with the wrong word is %q, origin %v", visitor.Name, visitor.Origin)
+	if first.Name != "pixel-9-3fa2" {
+		t.Errorf("the tab came back as %q", first.Name)
 	}
-	if _, err := agent.Join(ctx, tab.Hello{Platform: "Linux"}, "127.0.0.1"); !errors.Is(err, ErrTooManyHere) {
-		t.Errorf("a second visitor from the address: %v", err)
+	second, err := agent.Join(context.Background(), hello, "198.51.100.2")
+	if err != nil {
+		t.Fatal(err)
 	}
-}
-
-// TestVisitorTakesAResidentsPlace checks that a full cluster still
-// takes a visitor while a resident holds a place, by giving the
-// resident up, and that neither a resident nor a visitor is taken once
-// only visitors are left: with room for two nodes and two residents in
-// them.
-func TestVisitorTakesAResidentsPlace(t *testing.T) {
-	agent := testAgent(t, func(config *Config) { config.MaxNodes = 2 })
-	ctx := context.Background()
-
-	var residents []*Node
-	for range 2 {
-		node, err := agent.Join(ctx, tab.Hello{Resident: testWord}, "127.0.0.1")
-		if err != nil {
-			t.Fatal(err)
-		}
-		residents = append(residents, node)
-	}
-	if _, err := agent.Join(ctx, tab.Hello{Resident: testWord}, "127.0.0.1"); !errors.Is(err, ErrFull) {
-		t.Errorf("a third resident: %v", err)
-	}
-
-	// Each visitor is taken, and a resident is given up for each. The
-	// agent's server is what answers a resident's loss with its
-	// leaving; here the test does.
-	for index := range 2 {
-		if _, err := agent.Join(ctx, tab.Hello{Model: "Pixel 9"}, fmt.Sprintf("198.51.100.%d", index)); err != nil {
-			t.Fatalf("visitor %d: %v", index, err)
-		}
-		lost := 0
-		for _, resident := range residents {
-			select {
-			case <-resident.Lost():
-				agent.Leave(resident)
-				lost++
-			default:
-			}
-		}
-		if lost != index+1 {
-			t.Errorf("after visitor %d, %d residents were given up", index, lost)
-		}
-	}
-	if _, err := agent.Join(ctx, tab.Hello{Model: "Pixel 9"}, "198.51.100.9"); !errors.Is(err, ErrFull) {
-		t.Errorf("a visitor with no resident left to replace: %v", err)
+	if second.Name == first.Name {
+		t.Errorf("two nodes are named %q", second.Name)
 	}
 }
 
