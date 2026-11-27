@@ -1,0 +1,26 @@
+# The agent: the site, and the kubelet of every tab. PUBLIC_URL is
+# written by setup.sh to /etc/tabernetes/env.
+[Unit]
+Description=tabernetes, the kubelet of a cluster whose nodes are browser tabs
+After=k3s.service network-online.target
+Wants=k3s.service network-online.target
+
+[Service]
+EnvironmentFile=/etc/tabernetes/env
+# tabc keeps its images under the home directory's cache.
+Environment=HOME=/root
+ExecStartPre=/opt/tabernetes/deploy/firewall.sh
+ExecStart=/opt/tabernetes/bin/tabernetes \
+  --tabc /opt/tabernetes/bin/tabc \
+  --share /opt/tabernetes/share \
+  --cni-config /opt/tabernetes/deploy/tabs.json \
+  --host-path-root /var/lib/tabernetes/data \
+  --public-url ${PUBLIC_URL} \
+  --max-nodes ${MAX_NODES}
+Restart=always
+RestartSec=2
+# Every pod is two tabc processes, each with a handful of files open.
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+# A pod that names this class runs in a browser tab: the class sends the
+# pod to a node that is a tab, and lets the pod past the taint that
+# keeps every other pod off such nodes.
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: tab
+handler: tabc
+scheduling:
+  nodeSelector:
+    tabernetes.dev/tab: "true"
+  tolerations:
+    - key: tabernetes.dev/tab
+      operator: Exists
+      effect: NoSchedule

@@ -1,0 +1,16 @@
+# One pod in one tab, saying where it is every few seconds.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hello
+spec:
+  runtimeClassName: tab
+  containers:
+    - name: hello
+      image: alpine:3.22
+      command:
+        - sh
+        - -c
+        - |
+          echo "hello from $(uname -m) Linux $(uname -r), in a browser tab"
+          while true; do date; sleep 5; done
