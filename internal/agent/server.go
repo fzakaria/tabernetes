@@ -199,12 +199,12 @@ func (a *Agent) serveSocket(w http.ResponseWriter, r *http.Request) {
 	node, err := a.Join(ctx, hello, clientAddress(r))
 	if err != nil {
 		reason := "the cluster could not take this tab; try again in a moment"
-		if errors.Is(err, ErrFull) || errors.Is(err, ErrTooManyHere) {
+		if errors.Is(err, ErrFull) || errors.Is(err, ErrBusy) || errors.Is(err, ErrTooManyHere) {
 			reason = err.Error()
 		} else {
 			a.log.Printf("join: %v", err)
 		}
-		write(ctx, conn, Message{Type: MessageRefused, Reason: reason})
+		write(ctx, conn, Message{Type: MessageRefused, Reason: reason, Retry: errors.Is(err, ErrBusy)})
 		conn.Close(websocket.StatusTryAgainLater, "refused")
 		return
 	}
@@ -312,7 +312,7 @@ func (a *Agent) serveContainer(w http.ResponseWriter, r *http.Request, share *Sh
 
 	for _, dir := range sharedDirs {
 		if strings.HasPrefix(rest, dir) {
-			http.Redirect(w, r, share.Path(rest), http.StatusFound)
+			http.Redirect(w, r, share.Location(rest), http.StatusFound)
 			return
 		}
 	}

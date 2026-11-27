@@ -59,6 +59,12 @@ func Connect(kubeconfig string) (*Cluster, error) {
 	return &Cluster{client: client}, nil
 }
 
+// Over returns a Cluster that speaks through a client the caller made:
+// a test's stand-in for an API server.
+func Over(client kubernetes.Interface) *Cluster {
+	return &Cluster{client: client}
+}
+
 // The client's own rate limit: requests a second, and how many may go
 // at once.
 const (
@@ -190,6 +196,8 @@ type Service struct {
 	Namespace string
 	Name      string
 	ClusterIP string
+	// Ports are the ports the Service listens on.
+	Ports []int32
 	// Selector is the labels a pod has to carry to be behind the
 	// Service. A Service without one selects nothing.
 	Selector map[string]string
@@ -206,10 +214,15 @@ func (c *Cluster) Services(ctx context.Context) ([]Service, error) {
 		if len(item.Spec.Selector) == 0 {
 			continue
 		}
+		ports := make([]int32, 0, len(item.Spec.Ports))
+		for _, port := range item.Spec.Ports {
+			ports = append(ports, port.Port)
+		}
 		services = append(services, Service{
 			Namespace: item.Namespace,
 			Name:      item.Name,
 			ClusterIP: item.Spec.ClusterIP,
+			Ports:     ports,
 			Selector:  item.Spec.Selector,
 		})
 	}

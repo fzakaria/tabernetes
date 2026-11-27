@@ -169,7 +169,12 @@ func (a *Agent) start(pod *corev1.Pod, node *Node) {
 	started.carried = func(down, up int64) {
 		started.down.Add(down)
 		started.up.Add(up)
-		a.ledger.carried(down + up)
+
+		// What a resident carries never leaves the machine, and is in
+		// no total.
+		if node.Origin == tab.Visitor {
+			a.ledger.carried(down + up)
+		}
 	}
 	a.runs[pod.UID] = started
 	a.containers[started.id] = started
@@ -338,6 +343,14 @@ func (a *Agent) attempt(ctx context.Context, r *run, podDir string, sandbox **ru
 		return 0, &failure{reasonImagePull, err}
 	}
 
+	// A turn at the machine's part of the start, which is given back
+	// once tabc is up, or on the way out if the start fails first.
+	done, err := a.takeTurn(ctx)
+	if err != nil {
+		return 0, nil
+	}
+	defer done()
+
 	// The sandbox, which gives the pod its address.
 	if *sandbox == nil {
 		made, err := a.config.Network.Create(ctx, sandboxPrefix+r.id[:sandboxIDLength], r.pod.Namespace)
@@ -348,14 +361,36 @@ func (a *Agent) attempt(ctx context.Context, r *run, podDir string, sandbox **ru
 		snapshot.PodIP = made.IP
 		report()
 	}
-	return a.runContainer(ctx, r, *sandbox, plan, log, snapshot, report)
+	return a.runContainer(ctx, r, *sandbox, plan, log, snapshot, report, done)
+}
+
+// takeTurn waits for a turn at the machine's part of starting a pod,
+// and returns what gives the turn back, which may be called more than
+// once. A crowd of tabs that joins at once is a crowd of sandboxes and
+// tabc processes to start, and the machine is small: the pods take
+// their turns, and every tab is a node meanwhile. The error is the
+// context's, for a run that was stopped while waiting.
+func (a *Agent) takeTurn(ctx context.Context) (func(), error) {
+	if a.turns == nil {
+		return func() {}, nil
+	}
+	select {
+	case a.turns <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	var once sync.Once
+	return func() { once.Do(func() { <-a.turns }) }, nil
 }
 
 // runContainer runs the pod's program once: tabc in the sandbox, the
-// page in the node's tab, and a wait for the program to end.
+// page in the node's tab, and a wait for the program to end. `started`
+// is called once tabc is up or has failed to come up, which is where
+// the machine's part of the start ends and the tab's begins.
 func (a *Agent) runContainer(ctx context.Context, r *run, sandbox *runtime.Sandbox, plan runtime.Plan, log *os.File,
-	snapshot *kube.Snapshot, report func()) (int, *failure) {
+	snapshot *kube.Snapshot, report func(), started func()) (int, *failure) {
 	container, err := a.config.Tabc.Start(sandbox, plan.Args, log)
+	started()
 	if err != nil {
 		return 0, &failure{reasonStart, err}
 	}
@@ -411,8 +446,14 @@ func (a *Agent) runContainer(ctx context.Context, r *run, sandbox *runtime.Sandb
 	boot := time.Since(told)
 	r.show(sandbox.IP, true, boot)
 	defer r.show(sandbox.IP, false, boot)
-	a.ledger.started(r.node.Name, r.pod.Namespace+"/"+r.pod.Name,
-		tab.LabelValue(r.node.Hello.Platform), tab.LabelValue(r.node.Hello.Model), boot, time.Now())
+	podName := r.pod.Namespace + "/" + r.pod.Name
+	if r.node.Origin == tab.Visitor {
+		a.ledger.started(r.node.Name, podName,
+			tab.LabelValue(r.node.Hello.Platform), tab.LabelValue(r.node.Hello.Model), boot, time.Now())
+	} else {
+		// A resident's boot says nothing of anyone's phone: see Join.
+		a.ledger.noted(Event{At: time.Now(), Kind: EventStart, Node: r.node.Name, Pod: podName, Seconds: boot.Seconds()})
+	}
 
 	select {
 	case <-container.Done():

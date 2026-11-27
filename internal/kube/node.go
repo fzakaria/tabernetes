@@ -19,6 +19,7 @@ const (
 	LabelPlatform = "tabernetes.dev/platform"
 	LabelBrowser  = "tabernetes.dev/browser"
 	LabelModel    = "tabernetes.dev/model"
+	LabelResident = "tabernetes.dev/resident"
 	LabelValueTab = "true"
 	TaintTab      = "tabernetes.dev/tab"
 )
@@ -61,9 +62,10 @@ type NodeConfig struct {
 }
 
 // Node returns the Node a tab becomes: named, labelled with what the
-// browser said the tab runs on, tainted so that only pods asking for a
-// tab land on the node, and ready.
-func Node(name string, hello tab.Hello, config NodeConfig, now metav1.Time) *corev1.Node {
+// browser said the tab runs on and with being a resident if the tab is
+// one, tainted so that only pods asking for a tab land on the node, and
+// ready.
+func Node(name string, hello tab.Hello, origin tab.Origin, config NodeConfig, now metav1.Time) *corev1.Node {
 	resources := corev1.ResourceList{
 		corev1.ResourceCPU:    config.CPU,
 		corev1.ResourceMemory: config.Memory,
@@ -83,18 +85,23 @@ func Node(name string, hello tab.Hello, config NodeConfig, now metav1.Time) *cor
 		}
 	}
 
+	labels := map[string]string{
+		corev1.LabelHostname:   name,
+		corev1.LabelOSStable:   guestOS,
+		corev1.LabelArchStable: guestArch,
+		LabelTab:               LabelValueTab,
+		LabelPlatform:          tab.LabelValue(hello.Platform),
+		LabelBrowser:           tab.LabelValue(hello.Browser),
+		LabelModel:             tab.LabelValue(hello.Model),
+	}
+	if origin == tab.Resident {
+		labels[LabelResident] = LabelValueTab
+	}
+
 	return &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: name,
-			Labels: map[string]string{
-				corev1.LabelHostname:   name,
-				corev1.LabelOSStable:   guestOS,
-				corev1.LabelArchStable: guestArch,
-				LabelTab:               LabelValueTab,
-				LabelPlatform:          tab.LabelValue(hello.Platform),
-				LabelBrowser:           tab.LabelValue(hello.Browser),
-				LabelModel:             tab.LabelValue(hello.Model),
-			},
+			Name:   name,
+			Labels: labels,
 		},
 		Spec: corev1.NodeSpec{
 			Taints: []corev1.Taint{{

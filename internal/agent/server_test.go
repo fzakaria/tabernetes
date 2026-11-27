@@ -133,8 +133,9 @@ func TestPages(t *testing.T) {
 }
 
 // TestCluster checks the cluster's description for an agent nothing
-// has joined: JSON with no nodes, the agent's limit, and totals that
-// begin now, and the same JSON gzipped for a browser that takes gzip.
+// has joined: JSON with no nodes, room for as many as the agent's
+// limit, and totals that begin now, and the same JSON gzipped for a
+// browser that takes gzip.
 func TestCluster(t *testing.T) {
 	handler, _ := testSite(t)
 	response := get(handler, "/api/cluster", nil)
@@ -145,7 +146,7 @@ func TestCluster(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &view); err != nil {
 		t.Fatal(err)
 	}
-	if len(view.Nodes) != 0 || view.MaxNodes != 3 || view.Totals.Joins != 0 || view.Totals.Since.IsZero() {
+	if len(view.Nodes) != 0 || view.Room != 3 || view.Totals.Joins != 0 || view.Totals.Since.IsZero() {
 		t.Errorf("%+v", view)
 	}
 	if !strings.Contains(response.Body.String(), `"nodes":[]`) || !strings.Contains(response.Body.String(), `"events":[]`) {
@@ -158,7 +159,7 @@ func TestCluster(t *testing.T) {
 		t.Fatal(err)
 	}
 	unzipped, _ := io.ReadAll(reader)
-	if !strings.Contains(string(unzipped), `"maxNodes":3`) {
+	if !strings.Contains(string(unzipped), `"room":3`) {
 		t.Errorf("gzipped: %s", unzipped)
 	}
 }

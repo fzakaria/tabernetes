@@ -148,6 +148,14 @@ func (l *ledger) record(event Event) {
 	}
 }
 
+// noted adds an event to the feed and to no total: what a resident
+// does, which the site shows and does not count.
+func (l *ledger) noted(event Event) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.record(event)
+}
+
 // joined records that a tab became a node, with how many nodes there
 // are now.
 func (l *ledger) joined(node string, nodes int, now time.Time) {

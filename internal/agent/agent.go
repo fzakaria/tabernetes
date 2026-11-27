@@ -9,6 +9,7 @@ package agent
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -17,10 +18,12 @@ import (
 	"sync"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/fzakaria/tabernetes/internal/kube"
+	"github.com/fzakaria/tabernetes/internal/machine"
 	"github.com/fzakaria/tabernetes/internal/runtime"
 	"github.com/fzakaria/tabernetes/internal/tab"
 )
@@ -52,10 +55,21 @@ const (
 	sandboxIDLength = 12
 )
 
-// Why a tab is turned away.
+// Why a tab is turned away. A tab told the machine is busy asks again
+// by itself; the other two are for a person to read.
 var (
-	ErrFull        = errors.New("the cluster has all the nodes it takes; try again when someone leaves")
+	ErrFull        = errors.New("the cluster has all the nodes its machine has room for; try again when someone leaves")
+	ErrBusy        = errors.New("the cluster's machine is busy; this tab asks again in a moment")
 	ErrTooManyHere = errors.New("this address already has as many nodes as one address may")
+)
+
+// How often the machine is read, and how much of the newest reading
+// goes into what the agent takes the machine's busyness to be: the
+// rest is what it was taken to be before, so that one busy moment does
+// not turn a tab away.
+const (
+	vitalsEvery = 2 * time.Second
+	busyWeight  = 0.3
 )
 
 // Config is what an agent is made with.
@@ -67,10 +81,34 @@ type Config struct {
 	Node kube.NodeConfig
 	// Limits is what a pod is allowed.
 	Limits runtime.Limits
-	// MaxNodes is how many tabs may be nodes at once, and
-	// MaxNodesPerAddress how many of those may come from one address.
+	// MaxNodes is the most tabs that may be nodes at once, whatever
+	// room the machine has, and MaxNodesPerAddress how many of those
+	// may be visitors from one address.
 	MaxNodes           int
 	MaxNodesPerAddress int
+	// Proc is the directory the machine is read from, which is /proc.
+	// Empty means the machine is not read, and MaxNodes is the only
+	// limit.
+	Proc string
+	// ReserveMemory is how much of the machine's memory is kept back:
+	// a tab is turned away while less than this could still be given
+	// out. NodeCost is roughly what one node and its pod take of the
+	// machine's memory, which is what the site's count of the places
+	// left is worked out with.
+	ReserveMemory int64
+	NodeCost      int64
+	// BusyAbove is the part of its CPUs' time the machine may spend
+	// busy, from 0 to 1, before tabs are asked to wait. Zero means
+	// tabs are never asked to wait.
+	BusyAbove float64
+	// StartsAtOnce is how many pods may be at the machine's part of
+	// starting at once: the sandbox, and tabc. Zero means any number.
+	StartsAtOnce int
+	// ResidentWord is the word a resident's page says (tab.Hello). A
+	// tab that says it is a resident: not held to an address's limit,
+	// and the first to go when the cluster is full. Empty means the
+	// cluster has no residents.
+	ResidentWord string
 	// RuntimeClass is the name of the RuntimeClass whose pods run in
 	// tabs. A pod of that class bound to a node that is no tab of this
 	// agent's is bound to a tab that has gone.
@@ -131,6 +169,22 @@ type Agent struct {
 	// listing is the last `tabc list`, shared by every run that waits
 	// for its container to start.
 	listing listing
+
+	// vitals is the machine as last read, and turns the places at the
+	// machine's part of starting a pod, of which a run takes one.
+	vitals vitals
+	turns  chan struct{}
+}
+
+// vitals is the machine as the agent last read it.
+type vitals struct {
+	mu sync.Mutex
+	// known is whether the machine has been read at all.
+	known   bool
+	reading machine.Reading
+	// busy is the part of their time the CPUs have been busy lately,
+	// from 0 to 1.
+	busy float64
 }
 
 // Node is one tab.
@@ -143,6 +197,9 @@ type Node struct {
 	Address string
 	// Joined is when the tab became a node.
 	Joined time.Time
+	// Origin is whose browser the tab is in: a visitor's, or the
+	// cluster's own machine's.
+	Origin tab.Origin
 
 	// outbox is what the agent has to tell the tab's page.
 	outbox chan Message
@@ -162,8 +219,10 @@ type Message struct {
 	Path  string `json:"path,omitempty"`
 	Pod   string `json:"pod,omitempty"`
 	Image string `json:"image,omitempty"`
-	// Reason says why a tab is turned away, in a "refused".
+	// Reason says why a tab is turned away, in a "refused", and Retry
+	// that the tab may ask again by itself.
 	Reason string `json:"reason,omitempty"`
+	Retry  bool   `json:"retry,omitempty"`
 	// Nodes and Pods count the cluster, in a "cluster".
 	Nodes int `json:"nodes"`
 	Pods  int `json:"pods"`
@@ -184,7 +243,7 @@ const outboxSize = 32
 
 // New returns an agent that has not started.
 func New(config Config) *Agent {
-	return &Agent{
+	agent := &Agent{
 		config:     config,
 		log:        config.Log,
 		nodes:      map[string]*Node{},
@@ -194,6 +253,10 @@ func New(config Config) *Agent {
 		ledger:     newLedger(config.StateDir, time.Now()),
 		started:    time.Now(),
 	}
+	if config.StartsAtOnce > 0 {
+		agent.turns = make(chan struct{}, config.StartsAtOnce)
+	}
+	return agent
 }
 
 // Run clears away what an earlier agent left, then watches the cluster
@@ -215,9 +278,14 @@ func (a *Agent) Run(ctx context.Context) error {
 	defer listings.Stop()
 	saves := time.NewTicker(saveEvery)
 	defer saves.Stop()
+	readings := time.NewTicker(vitalsEvery)
+	defer readings.Stop()
 	a.listServices(ctx)
+	a.readVitals()
 	for {
 		select {
+		case <-readings.C:
+			a.readVitals()
 		case <-renewals.C:
 			a.renew(ctx)
 		case <-listings.C:
@@ -251,6 +319,108 @@ func (a *Agent) listServices(ctx context.Context) {
 	a.mu.Lock()
 	a.services = services
 	a.mu.Unlock()
+}
+
+// readVitals reads the machine, and works the reading into what the
+// agent takes the machine's busyness to be.
+func (a *Agent) readVitals() {
+	if a.config.Proc == "" {
+		return
+	}
+	reading, err := machine.Read(a.config.Proc)
+	if err != nil {
+		a.log.Printf("reading the machine: %v", err)
+		return
+	}
+
+	a.vitals.mu.Lock()
+	defer a.vitals.mu.Unlock()
+	if a.vitals.known {
+		sample := reading.BusySince(a.vitals.reading)
+		a.vitals.busy = a.vitals.busy*(1-busyWeight) + sample*busyWeight
+	}
+	a.vitals.reading = reading
+	a.vitals.known = true
+}
+
+// machineNow returns the machine as last read, how busy the agent
+// takes the machine to be, and whether the machine has been read.
+func (a *Agent) machineNow() (machine.Reading, float64, bool) {
+	a.vitals.mu.Lock()
+	defer a.vitals.mu.Unlock()
+	return a.vitals.reading, a.vitals.busy, a.vitals.known
+}
+
+// refusal returns why another tab may not become a node now, or nil:
+// the cluster has the most nodes it is ever to have, the machine has
+// too little memory left, or the machine is too busy. The caller holds
+// the agent's lock.
+func (a *Agent) refusal() error {
+	if len(a.nodes) >= a.config.MaxNodes {
+		return ErrFull
+	}
+	reading, busy, known := a.machineNow()
+	if !known {
+		return nil
+	}
+	if a.config.ReserveMemory > 0 && reading.MemoryAvailable < a.config.ReserveMemory {
+		return ErrFull
+	}
+	if a.config.BusyAbove > 0 && busy > a.config.BusyAbove {
+		return ErrBusy
+	}
+	return nil
+}
+
+// room returns how many more nodes the cluster would take now: up to
+// the most it is ever to have, and no more than the machine's spare
+// memory is enough for. The caller holds the agent's lock.
+func (a *Agent) room() int {
+	room := a.config.MaxNodes - len(a.nodes)
+	reading, _, known := a.machineNow()
+	if known && a.config.ReserveMemory > 0 && a.config.NodeCost > 0 {
+		spare := reading.MemoryAvailable - a.config.ReserveMemory
+		room = min(room, int(spare/a.config.NodeCost))
+	}
+	return max(0, room)
+}
+
+// originOf returns whose browser a tab is in: the machine's own, for a
+// tab that says the residents' word, and a visitor's otherwise.
+func (a *Agent) originOf(hello tab.Hello) tab.Origin {
+	word := a.config.ResidentWord
+	if word == "" || subtle.ConstantTimeCompare([]byte(hello.Resident), []byte(word)) != 1 {
+		return tab.Visitor
+	}
+	return tab.Resident
+}
+
+// newestResident returns the resident that joined last and has not
+// been given up, or nil when there is none. The caller holds the
+// agent's lock.
+func (a *Agent) newestResident() *Node {
+	var newest *Node
+	for _, node := range a.nodes {
+		if node.Origin != tab.Resident || node.isLost() {
+			continue
+		}
+		if newest == nil || node.Joined.After(newest.Joined) {
+			newest = node
+		}
+	}
+	return newest
+}
+
+// visitors returns how many named nodes are visitors'. The caller
+// holds the agent's lock.
+func (a *Agent) visitors() int {
+	count := 0
+	for name, node := range a.nodes {
+		if node.Origin == tab.Visitor && !strings.HasPrefix(name, placeholderPrefix) {
+			count++
+		}
+	}
+	return count
 }
 
 // saveLedger writes the ledger's totals to their file.
@@ -321,27 +491,48 @@ func (a *Agent) removeNodeAndPods(ctx context.Context, name string) {
 // Join makes a tab a node. The returned node's messages are for the
 // tab's page, and Leave is to be called when the page is gone.
 func (a *Agent) Join(ctx context.Context, hello tab.Hello, address string) (*Node, error) {
+	origin := a.originOf(hello)
+	if origin == tab.Resident {
+		// A resident is on the cluster's machine, which is where the
+		// site's map is to put it, whatever zone the machine's clock
+		// is set to.
+		hello.Zone = a.config.Zone
+	}
+
 	// A place is taken before the API server is asked, so that a crowd
 	// arriving at once cannot overshoot the limits.
 	a.mu.Lock()
-	if len(a.nodes) >= a.config.MaxNodes {
-		a.mu.Unlock()
-		return nil, ErrFull
-	}
-	here := 0
-	for _, node := range a.nodes {
-		if node.Address == address {
-			here++
+	refused := a.refusal()
+	if errors.Is(refused, ErrFull) && origin == tab.Visitor {
+		// A full cluster still has room for a visitor while a resident
+		// holds a place: residents are there so that the cluster is
+		// never empty, and are the first to go.
+		if resident := a.newestResident(); resident != nil {
+			resident.lose()
+			refused = nil
 		}
 	}
-	if here >= a.config.MaxNodesPerAddress {
+	if refused != nil {
 		a.mu.Unlock()
-		return nil, ErrTooManyHere
+		return nil, refused
+	}
+	if origin == tab.Visitor {
+		here := 0
+		for _, node := range a.nodes {
+			if node.Origin == tab.Visitor && node.Address == address {
+				here++
+			}
+		}
+		if here >= a.config.MaxNodesPerAddress {
+			a.mu.Unlock()
+			return nil, ErrTooManyHere
+		}
 	}
 	node := &Node{
 		Hello:   hello,
 		Address: address,
 		Joined:  time.Now(),
+		Origin:  origin,
 		outbox:  make(chan Message, outboxSize),
 		lost:    make(chan struct{}),
 	}
@@ -361,9 +552,16 @@ func (a *Agent) Join(ctx context.Context, hello tab.Hello, address string) (*Nod
 		return nil, err
 	}
 	count := a.named()
+	visitors := a.visitors()
 	a.mu.Unlock()
 
-	a.ledger.joined(node.Name, count, node.Joined)
+	// The ledger's totals are of visitors. A resident is in the feed
+	// and in no total.
+	if origin == tab.Visitor {
+		a.ledger.joined(node.Name, visitors, node.Joined)
+	} else {
+		a.ledger.noted(Event{At: node.Joined, Kind: EventJoin, Node: node.Name})
+	}
 	a.log.Printf("node %s joined from %s (%s); %d nodes", node.Name, address, hello.Describe(), count)
 	return node, nil
 }
@@ -398,7 +596,7 @@ func (a *Agent) register(ctx context.Context, node *Node) error {
 
 	var err error
 	for attempt := 0; attempt < nameAttempts; attempt++ {
-		name := node.Hello.NodeName(randomHex(nodeSuffixBytes))
+		name := node.Hello.NodeNameFor(node.Origin, randomHex(nodeSuffixBytes))
 		a.mu.Lock()
 		if a.nodes[name] != nil {
 			a.mu.Unlock()
@@ -408,7 +606,7 @@ func (a *Agent) register(ctx context.Context, node *Node) error {
 		a.nodes[name] = node
 		a.mu.Unlock()
 
-		err = a.config.Cluster.AddNode(ctx, kube.Node(name, node.Hello, a.config.Node, metav1.Now()))
+		err = a.config.Cluster.AddNode(ctx, kube.Node(name, node.Hello, node.Origin, a.config.Node, metav1.Now()))
 		if err == nil {
 			return nil
 		}
@@ -434,15 +632,29 @@ func (a *Agent) Leave(node *Node) {
 	var running []*run
 	var moved []string
 	for _, candidate := range a.runs {
-		if candidate.node == node {
-			running = append(running, candidate)
+		if candidate.node != node {
+			continue
+		}
+		running = append(running, candidate)
+		if movesElsewhere(candidate.pod) {
 			moved = append(moved, candidate.pod.Namespace+"/"+candidate.pod.Name)
 		}
 	}
 	count := len(a.nodes)
 	a.mu.Unlock()
 	node.lose()
-	a.ledger.left(node.Name, time.Since(node.Joined), moved, time.Now())
+
+	// The ledger's totals are of visitors: see Join.
+	now := time.Now()
+	lifetime := now.Sub(node.Joined)
+	if node.Origin == tab.Visitor {
+		a.ledger.left(node.Name, lifetime, moved, now)
+	} else {
+		a.ledger.noted(Event{At: now, Kind: EventLeave, Node: node.Name, Seconds: lifetime.Seconds(), Pods: len(moved)})
+		for _, pod := range moved {
+			a.ledger.noted(Event{At: now, Kind: EventMove, Node: node.Name, Pod: pod})
+		}
+	}
 
 	// The node goes first and its pods after. A pod's controller makes
 	// a new pod the moment the old one is gone, and the scheduler must
@@ -452,6 +664,19 @@ func (a *Agent) Leave(node *Node) {
 		candidate.cancel()
 	}
 	a.log.Printf("node %s left; %d nodes", node.Name, count)
+}
+
+// kindDaemonSet is the kind of the controller whose pods are each for
+// one node.
+const kindDaemonSet = "DaemonSet"
+
+// movesElsewhere reports whether a pod that loses its tab is made
+// again for another node: a pod with a controller. A DaemonSet's pod
+// is the exception, since that pod is for the one node and ends with
+// the node.
+func movesElsewhere(pod *corev1.Pod) bool {
+	owner := metav1.GetControllerOf(pod)
+	return owner != nil && owner.Kind != kindDaemonSet
 }
 
 // removeAll takes every node out of the cluster and waits for their
@@ -515,6 +740,16 @@ func (n *Node) tell(message Message) {
 // lose marks the node as given up.
 func (n *Node) lose() {
 	n.loseOnce.Do(func() { close(n.lost) })
+}
+
+// isLost reports whether the node has been given up.
+func (n *Node) isLost() bool {
+	select {
+	case <-n.lost:
+		return true
+	default:
+		return false
+	}
 }
 
 // Counts returns how many nodes and pods there are.

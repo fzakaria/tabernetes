@@ -28,7 +28,27 @@ type Hello struct {
 	// puts a node on its map by the zone's city, which says roughly
 	// where a node is without the agent looking up anyone's address.
 	Zone string `json:"zone"`
+	// Resident is the word the cluster's own machine gives the pages it
+	// keeps open, which is how the agent tells a resident from a
+	// visitor. A visitor's page sends none.
+	Resident string `json:"resident,omitempty"`
 }
+
+// Origin is whose browser a tab is in.
+type Origin int
+
+const (
+	// Visitor: someone's browser, somewhere.
+	Visitor Origin = iota
+	// Resident: a browser the cluster's own machine keeps open, so that
+	// the cluster has nodes when nobody is visiting.
+	Resident
+)
+
+// residentName is what every resident's name starts with: a resident
+// is named for what it is and not for its browser, so that nobody
+// takes one for a visitor.
+const residentName = "resident"
 
 // The limits of a name: a DNS label's length, and how much of it the
 // device's own words may take, which leaves room for the suffix.
@@ -60,6 +80,16 @@ func (h Hello) NodeName(suffix string) string {
 		base = fallbackName
 	}
 	return base + "-" + suffix
+}
+
+// NodeNameFor returns the name of a node of an origin: a visitor's is
+// made from what its browser said (NodeName), and a resident's says
+// that the node is a resident.
+func (h Hello) NodeNameFor(origin Origin, suffix string) string {
+	if origin == Resident {
+		return residentName + "-" + suffix
+	}
+	return h.NodeName(suffix)
 }
 
 // Describe returns a line for the node's OS image: the browser and the

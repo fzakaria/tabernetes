@@ -50,14 +50,20 @@ type NodeView struct {
 	Zone    string    `json:"zone"`
 	Threads int       `json:"threads"`
 	Joined  time.Time `json:"joined"`
-	Pods    []PodView `json:"pods"`
+	// Resident is whether the node is a browser the cluster's own
+	// machine keeps open, and not a visitor's.
+	Resident bool      `json:"resident"`
+	Pods     []PodView `json:"pods"`
 }
 
 // ServiceView is a Service as the site shows one: its name, as
-// "namespace/name", and the pods on tabs it is in front of.
+// "namespace/name", the address and ports it listens on inside the
+// cluster, and the pods on tabs it is in front of.
 type ServiceView struct {
-	Name string   `json:"name"`
-	Pods []string `json:"pods"`
+	Name      string   `json:"name"`
+	ClusterIP string   `json:"clusterIP"`
+	Ports     []int32  `json:"ports"`
+	Pods      []string `json:"pods"`
 }
 
 // MachineView is the cluster's own machine as the site shows it.
@@ -65,6 +71,13 @@ type MachineView struct {
 	Zone    string `json:"zone"`
 	Version string `json:"version"`
 	Runtime string `json:"runtime"`
+	// MemoryTotal and MemoryAvailable are the machine's memory and how
+	// much of it could still be given out, in bytes, and Busy the part
+	// of their time the machine's CPUs have been busy lately, from 0 to
+	// 1. All are zero for a machine the agent does not read.
+	MemoryTotal     int64   `json:"memoryTotal"`
+	MemoryAvailable int64   `json:"memoryAvailable"`
+	Busy            float64 `json:"busy"`
 }
 
 // View is the cluster as the site shows it.
@@ -73,9 +86,10 @@ type View struct {
 	// trusting its own.
 	Now time.Time `json:"now"`
 	// Started is when this agent started.
-	Started  time.Time     `json:"started"`
-	Machine  MachineView   `json:"machine"`
-	MaxNodes int           `json:"maxNodes"`
+	Started time.Time   `json:"started"`
+	Machine MachineView `json:"machine"`
+	// Room is how many more nodes the cluster would take now.
+	Room     int           `json:"room"`
 	Totals   Totals        `json:"totals"`
 	Nodes    []NodeView    `json:"nodes"`
 	Services []ServiceView `json:"services"`
@@ -91,15 +105,18 @@ type View struct {
 // ledger.
 func (a *Agent) Snapshot() View {
 	totals, events, boots := a.ledger.view()
+	reading, busy, _ := a.machineNow()
 	view := View{
 		Now:     time.Now(),
 		Started: a.started,
 		Machine: MachineView{
-			Zone:    a.config.Zone,
-			Version: a.config.Node.Version,
-			Runtime: a.config.Node.RuntimeVersion,
+			Zone:            a.config.Zone,
+			Version:         a.config.Node.Version,
+			Runtime:         a.config.Node.RuntimeVersion,
+			MemoryTotal:     reading.MemoryTotal,
+			MemoryAvailable: reading.MemoryAvailable,
+			Busy:            busy,
 		},
-		MaxNodes: a.config.MaxNodes,
 		Totals:   totals,
 		Nodes:    []NodeView{},
 		Services: []ServiceView{},
@@ -114,6 +131,7 @@ func (a *Agent) Snapshot() View {
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	view.Room = a.room()
 
 	// The nodes, each with its pods.
 	for name, node := range a.nodes {
@@ -128,6 +146,7 @@ func (a *Agent) Snapshot() View {
 			Zone:     node.Hello.PlainZone(),
 			Threads:  node.Hello.PlainThreads(),
 			Joined:   node.Joined,
+			Resident: node.Origin == tab.Resident,
 			Pods:     []PodView{},
 		}
 		for _, running := range a.runs {
@@ -155,7 +174,11 @@ func (a *Agent) Snapshot() View {
 
 	// The Services that are in front of at least one pod on a tab.
 	for _, service := range a.services {
-		entry := ServiceView{Name: service.Namespace + "/" + service.Name}
+		entry := ServiceView{
+			Name:      service.Namespace + "/" + service.Name,
+			ClusterIP: service.ClusterIP,
+			Ports:     service.Ports,
+		}
 		for _, running := range a.runs {
 			if service.Selects(running.pod.Namespace, running.pod.Labels) {
 				entry.Pods = append(entry.Pods, running.pod.Namespace+"/"+running.pod.Name)

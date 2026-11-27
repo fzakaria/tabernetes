@@ -26,6 +26,19 @@ func TestNodeName(t *testing.T) {
 	}
 }
 
+// TestNodeNameFor checks that a resident is named a resident whatever
+// its browser says it is, and that a visitor keeps the name made from
+// its browser's words.
+func TestNodeNameFor(t *testing.T) {
+	hello := Hello{Model: "Pixel 9 Pro", Platform: "Android", Browser: "Chrome"}
+	if got := hello.NodeNameFor(Resident, "3fa2"); got != "resident-3fa2" {
+		t.Errorf("resident named %q", got)
+	}
+	if got := hello.NodeNameFor(Visitor, "3fa2"); got != "pixel-9-pro-3fa2" {
+		t.Errorf("visitor named %q", got)
+	}
+}
+
 // TestNodeNameIsALabel checks that whatever a browser sends, the name is
 // one Kubernetes takes: lowercase letters, digits and dashes, starting
 // and ending with a letter or digit, and no longer than a DNS label.

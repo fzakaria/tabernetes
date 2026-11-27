@@ -26,7 +26,7 @@ func TestNode(t *testing.T) {
 		Memory:         resource.MustParse("256Mi"),
 		Pods:           resource.MustParse("1"),
 	}
-	node := Node("pixel-9-3fa2", hello, config, metav1.NewTime(time.Unix(1, 0)))
+	node := Node("pixel-9-3fa2", hello, tab.Visitor, config, metav1.NewTime(time.Unix(1, 0)))
 
 	if node.Name != "pixel-9-3fa2" {
 		t.Errorf("name %q", node.Name)
@@ -66,6 +66,21 @@ func TestNode(t *testing.T) {
 	}
 	if node.Status.DaemonEndpoints.KubeletEndpoint.Port != 10260 {
 		t.Errorf("kubelet port %d", node.Status.DaemonEndpoints.KubeletEndpoint.Port)
+	}
+}
+
+// TestResidentNode checks that a resident's Node says it is one, in a
+// label a pod can select or avoid, and that a visitor's Node has no
+// such label.
+func TestResidentNode(t *testing.T) {
+	now := metav1.NewTime(time.Unix(1, 0))
+	resident := Node("resident-3fa2", tab.Hello{}, tab.Resident, NodeConfig{}, now)
+	if resident.Labels[LabelResident] != "true" {
+		t.Errorf("a resident's labels: %v", resident.Labels)
+	}
+	visitor := Node("pixel-9-3fa2", tab.Hello{}, tab.Visitor, NodeConfig{}, now)
+	if _, has := visitor.Labels[LabelResident]; has {
+		t.Errorf("a visitor's labels: %v", visitor.Labels)
 	}
 }
 

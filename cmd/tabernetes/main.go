@@ -57,6 +57,14 @@ const probeAddress = "192.0.2.1:9"
 // stops.
 const shutdownTimeout = 5 * time.Second
 
+// procDir is where the machine says how much memory and CPU time it
+// has left, and mirrorTimeout how long a mirror gets to serve the
+// kernel for the agent to compare with its own.
+const (
+	procDir       = "/proc"
+	mirrorTimeout = 2 * time.Minute
+)
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "tabernetes: %v\n", err)
@@ -80,8 +88,14 @@ func run() error {
 		clusterDomain = flag.String("cluster-domain", "cluster.local", "the cluster's domain")
 		address       = flag.String("address", "", "the address the API server reaches the agent on (default: this machine's)")
 		kubeletPort   = flag.Int("kubelet-port", 10260, "the port a node gives as its kubelet's")
-		maxNodes      = flag.Int("max-nodes", 100, "how many tabs may be nodes at once")
+		maxNodes      = flag.Int("max-nodes", 1000, "the most tabs that may be nodes at once, whatever room the machine has")
 		maxPerAddress = flag.Int("max-nodes-per-address", 4, "how many nodes may come from one address")
+		reserveMemory = flag.String("reserve-memory", "1Gi", "how much of the machine's memory is kept back: tabs are turned away while less could still be given out")
+		nodeCost      = flag.String("node-cost", "12Mi", "roughly what one node takes of the machine's memory, for the site's count of the places left")
+		busyAbove     = flag.Float64("busy-above", 0.9, "the part of its CPUs' time the machine may spend busy before tabs are asked to wait (0: never)")
+		startsAtOnce  = flag.Int("starts-at-once", 8, "how many pods may be at the machine's part of starting at once (0: any number)")
+		residentWord  = flag.String("resident-word", "", "the word a resident's page says: a tab that says it is one of the machine's own browsers (default: no residents)")
+		mirror        = flag.String("unkernel-mirror", "", "an address that serves unkernel's published files, with {version} where the version goes; tabs fetch the kernel from there once it is seen to be the share's")
 		nodeMemory    = flag.String("node-memory", "256Mi", "the memory one tab offers")
 		hostPathRoot  = flag.String("host-path-root", "", "the one directory a pod's hostPath volume may be under (default: none)")
 		guestKernel   = flag.String("guest-kernel", "7.3.4-unkernel", "the kernel version a node reports: the guest's")
@@ -129,6 +143,14 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("--node-memory: %w", err)
 	}
+	reserve, err := resource.ParseQuantity(*reserveMemory)
+	if err != nil {
+		return fmt.Errorf("--reserve-memory: %w", err)
+	}
+	cost, err := resource.ParseQuantity(*nodeCost)
+	if err != nil {
+		return fmt.Errorf("--node-cost: %w", err)
+	}
 	if *address == "" {
 		*address, err = ownAddress()
 		if err != nil {
@@ -159,6 +181,12 @@ func run() error {
 		Limits:             runtime.Limits{MaxMemoryMiB: memory.Value() >> 20, HostPathRoot: *hostPathRoot},
 		MaxNodes:           *maxNodes,
 		MaxNodesPerAddress: *maxPerAddress,
+		Proc:               procDir,
+		ReserveMemory:      reserve.Value(),
+		NodeCost:           cost.Value(),
+		BusyAbove:          *busyAbove,
+		StartsAtOnce:       *startsAtOnce,
+		ResidentWord:       *residentWord,
 		RuntimeClass:       *runtimeClass,
 		StateDir:           *stateDir,
 		Zone:               *zone,
@@ -169,6 +197,20 @@ func run() error {
 	// The agent and the site end together, on a signal.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// The mirror is looked at while the site is already up: until the
+	// mirror is seen to have the share's kernel, tabs get the agent's.
+	if *mirror != "" {
+		go func() {
+			looking, cancel := context.WithTimeout(ctx, mirrorTimeout)
+			defer cancel()
+			if err := share.UseMirror(looking, http.DefaultClient, *mirror); err != nil {
+				logger.Printf("--unkernel-mirror: %v; tabs get the kernel from here", err)
+				return
+			}
+			logger.Printf("tabs get the kernel from %s", share.Location(agent.KernelFile))
+		}()
+	}
 
 	site, err := tabs.Handler(agent.Site{Pages: web.Files, Share: share, PublicURL: *publicURL, Build: build})
 	if err != nil {
