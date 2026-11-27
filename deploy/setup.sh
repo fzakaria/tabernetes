@@ -79,6 +79,35 @@ fi
 mkdir -p /etc/cni/net.d /opt/cni/bin /etc/tabernetes /etc/rancher/k3s /var/lib/tabernetes/data
 cp "$BUNDLE/deploy/cluster.conflist" /etc/cni/net.d/10-cluster.conflist
 
+# The directory pods' volumes are under gets a filesystem of its own,
+# of a fixed size. A pod on a tab writes to its volume from a kernel
+# the tab's owner controls, so nothing bounds what is written but the
+# room there is: a volume that is filled must not be the machine's disk
+# that is filled, with k3s on it.
+DATA_DIR=/var/lib/tabernetes/data
+DATA_IMAGE=/var/lib/tabernetes/data.img
+DATA_SIZE=512M
+if ! mountpoint -q "$DATA_DIR"; then
+  # Pods are writing to the directory as it is. The agent's stopping
+  # stops them, and what they wrote is carried over.
+  systemctl stop tabernetes.service >/dev/null 2>&1 || true
+  if [ ! -f "$DATA_IMAGE" ]; then
+    truncate -s "$DATA_SIZE" "$DATA_IMAGE"
+    mkfs.ext4 -q -F -m 0 "$DATA_IMAGE"
+  fi
+  kept=$(mktemp -d /var/lib/tabernetes/data-before.XXXXXX)
+  cp -a "$DATA_DIR/." "$kept/"
+  find "$DATA_DIR" -mindepth 1 -delete
+  mount -o loop "$DATA_IMAGE" "$DATA_DIR"
+  cp -a "$kept/." "$DATA_DIR/"
+  rm -rf "$kept"
+fi
+
+# The filesystem is mounted again when the machine starts.
+if ! grep -q "^$DATA_IMAGE " /etc/fstab; then
+  echo "$DATA_IMAGE $DATA_DIR ext4 loop,nofail 0 0" >>/etc/fstab
+fi
+
 # k3s's settings. A k3s that is already running is restarted only when
 # the settings changed.
 K3S_CONFIG=/etc/rancher/k3s/config.yaml
