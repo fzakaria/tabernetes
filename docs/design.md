@@ -183,6 +183,42 @@ pods answer is for the cluster and not for visitors. A request that
 fails is tried again by the page, since the pod it was sent to may have
 just lost its tab.
 
+## A picture every tab renders
+
+The site's "Render a picture" button has every tab work on one thing: a
+picture of the Mandelbrot set, 8 tiles by 8, each tile rendered by
+whichever tab's pod was asked for it. The site shows the tiles as they
+arrive and whose device rendered each.
+
+A tab has room for one pod, so the work is done by the pod every tab
+already has, the counter's web server (`examples/counter.yaml`). A GET
+for `/tile/<picture>/<tiles to a side>/<tile>` runs an awk program in
+the guest and answers with the tile's pixels and the node's name. What
+a tile costs is fixed in the pod and not in the request: 12 pixels to a
+side and 64 turns for a point. The guest does about 7000 turns a
+second, so a tile takes from a tenth of a second to a little over one.
+The web Service is exposed to visitors for `/json` alone, so no visitor
+can ask a phone for a tile.
+
+The painter (`examples/picture.yaml`) is a pod on the cluster's own
+machine, a hundred and some lines of Python, and is exposed whole as
+`picture`. It finds the tabs through a Service without an address
+(`web-pods`), whose name the cluster's DNS answers with every pod that
+is ready, and gives each pod one tile at a time, so a fast phone
+renders more tiles than a slow one. A pod that fails or takes more than
+8 seconds loses its tile to another pod. A picture that is not whole
+after 90 seconds is left as it is.
+
+Nobody says what is rendered: the pods have a list of four pictures and
+the painter goes round it. One picture is rendered at a time, and the
+painter starts no other for a minute after, so the button is no way to
+keep strangers' phones busy. The page reads the painter once a second
+while a picture is rendered and every ten seconds otherwise, asking
+only for the tiles it does not have.
+
+The agent knows none of this. To the agent the painter is one more
+exposed Service.
+
 ## The walls
 
 A pod on a tab is run by a browser nobody vetted. Two things follow.

@@ -62,13 +62,15 @@ UNKERNEL_MIRROR=${UNKERNEL_MIRROR-https://cdn.jsdelivr.net/npm/unkernel@{version
 # machine's own clock is on UTC, which is nowhere.
 ZONE=${ZONE:-America/Los_Angeles}
 
-# The demo: the counter and a pod for every tab (examples/), and the
-# counter's web Service open to the site's visitors. DEMO=no leaves the
-# cluster empty.
+# The demo: the counter, whose web server every tab runs, and the
+# painter of the picture those web servers render (examples/). The
+# site's visitors may ask the counter for its count and nothing else,
+# and the painter for anything it answers. DEMO=no leaves the cluster
+# empty.
 DEMO=${DEMO:-yes}
 EXPOSE=
 if [ "$DEMO" = yes ]; then
-  EXPOSE=counter=default/web:8000
+  EXPOSE=counter=default/web:8000/json,picture=default/picture:8000
 fi
 
 # The pod network: one bridge for every pod, the cluster's own and the
@@ -109,7 +111,15 @@ if [ "$DEMO" = yes ]; then
   # servers on three of the tabs.
   k3s kubectl delete deployment everywhere web --ignore-not-found
   k3s kubectl delete daemonset everywhere --ignore-not-found
-  k3s kubectl apply -f "$BUNDLE/examples/counter.yaml"
+  k3s kubectl apply -f "$BUNDLE/examples/counter.yaml" -f "$BUNDLE/examples/picture.yaml"
+
+  # The painter reads its program once, when the painter starts. The
+  # version of the ConfigMap that holds the program is written on the
+  # painter's pod as an annotation, so the Deployment replaces the pod
+  # when the program changed and leaves the pod alone when not.
+  program=$(k3s kubectl get configmap painter -o jsonpath='{.metadata.resourceVersion}')
+  k3s kubectl patch deployment picture --patch \
+    "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"tabernetes.dev/program\":\"$program\"}}}}}"
 fi
 
 # Where addresses are, for the site's map: DB-IP's free database of

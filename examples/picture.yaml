@@ -1,0 +1,344 @@
+# A picture every tab renders a part of: the painter, which cuts a
+# picture into tiles, asks the tabs' pods for them and keeps what comes
+# back with the name of the node that rendered each.
+#
+#   kubectl apply -f counter.yaml -f picture.yaml
+#   curl $(kubectl get svc picture -o jsonpath='{.spec.clusterIP}'):8000/start
+#   curl $(kubectl get svc picture -o jsonpath='{.spec.clusterIP}'):8000/state
+#
+# The tiles are rendered by the web servers of counter.yaml, one on
+# every tab: a tab has room for one pod, and that pod is the one. The
+# painter is an ordinary pod on the cluster's own machine. With the
+# agent started with `--expose picture=default/picture:8000`, the
+# site's "Render a picture" button starts a picture and the site shows
+# the tiles as they arrive.
+#
+# Nobody says what is rendered: the web servers have a list of
+# pictures and the painter goes round it. One picture is rendered at a
+# time, and the tabs are left alone for a minute after each, so the
+# button is no way to keep strangers' phones busy.
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-pods
+spec:
+  # No address of its own: the cluster's DNS answers the name with the
+  # address of every web server that is ready, which is how the painter
+  # knows the tabs there are. The Service "web" would hand each request
+  # to a pod of its own choosing, two to one tab and none to another.
+  clusterIP: None
+  selector:
+    app: web
+  ports:
+    - port: 8000
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: painter
+data:
+  painter.py: |
+    """The painter: has the tabs render one picture, a tile each at a time.
+
+    GET /state                    the picture so far
+    GET /state/<picture>/<have>   the same without the first <have> tiles,
+                                  for a reader that has them already
+    GET /start                    begin the next picture
+    """
+
+    import json
+    import math
+    import os
+    import queue
+    import random
+    import re
+    import socket
+    import threading
+    import time
+    import urllib.request
+    from http import HTTPStatus
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    # Where the tabs' web servers are, and where the painter listens.
+    WORKERS = os.environ.get("WORKERS", "web-pods")
+    WORKER_PORT = int(os.environ.get("WORKER_PORT", "8000"))
+    PORT = int(os.environ.get("PORT", "8000"))
+
+    # How many tiles a picture has to a side.
+    SIDE = 8
+
+    # How long one pod may take over one tile, how long a picture may
+    # take in all, and how long the tabs are left alone after a picture.
+    TILE_SECONDS = 8
+    PICTURE_SECONDS = 90
+    REST_SECONDS = 60
+
+    # The wait before the tabs are looked up again when a round of
+    # asking left tiles unrendered.
+    ROUND_SECONDS = 1
+
+    # A picture's number is sent to the web servers, which take six
+    # digits.
+    NUMBERS = 1000000
+
+    # What a pod may answer with: a node's name, and two hex digits for
+    # each pixel of a square tile. A pod is in a stranger's browser, and
+    # its answer goes to every visitor's page.
+    NODE = re.compile(r"[a-z0-9]([-a-z0-9.]{0,61}[a-z0-9])?")
+    PIXELS = re.compile(r"(?:[0-9a-f]{2}){1,1024}")
+    ANSWER_BYTES = 4096
+
+
+    class Picture:
+        """One picture: its tiles in the order they arrived."""
+
+        def __init__(self, number):
+            self.number = number
+            self.tiles = []
+            self.rendered = set()
+            self.began = time.monotonic()
+            self.ended = None
+            self.note = ""
+
+            # The pods that failed to render a tile of this picture.
+            self.failed = set()
+
+        def missing(self):
+            return [tile for tile in range(SIDE * SIDE) if tile not in self.rendered]
+
+
+    # The picture being rendered or the last one rendered, and the lock
+    # that everything read from the picture or written to it holds.
+    lock = threading.Lock()
+    picture = None
+
+
+    def ready_pods():
+        """The addresses of the web servers that are ready, in no order."""
+        try:
+            found = socket.getaddrinfo(WORKERS, WORKER_PORT, socket.AF_INET, socket.SOCK_STREAM)
+        except OSError:
+            return []
+        addresses = list({entry[4][0] for entry in found})
+        random.shuffle(addresses)
+        return addresses
+
+
+    def fetch(address, number, tile):
+        """One tile from one pod, as the node's name and the pixels."""
+        url = f"http://{address}:{WORKER_PORT}/tile/{number}/{SIDE}/{tile}"
+        with urllib.request.urlopen(url, timeout=TILE_SECONDS) as response:
+            answer = json.loads(response.read(ANSWER_BYTES))
+        node, pixels = answer["node"], answer["pixels"]
+        if not isinstance(node, str) or not NODE.fullmatch(node):
+            raise ValueError("the node's name is no name")
+        if not isinstance(pixels, str) or not PIXELS.fullmatch(pixels):
+            raise ValueError("the pixels are not hex digits")
+        if math.isqrt(len(pixels) // 2) ** 2 != len(pixels) // 2:
+            raise ValueError("the tile is not square")
+        return node, pixels
+
+
+    def work(address, wanted, into, deadline):
+        """Ask one pod for tile after tile until none is left to ask for.
+
+        A pod that fails puts its tile back for another pod and is asked
+        for nothing more this round: its tab has probably closed.
+        """
+        while time.monotonic() < deadline:
+            try:
+                tile = wanted.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                node, pixels = fetch(address, into.number, tile)
+            except Exception:
+                wanted.put(tile)
+                with lock:
+                    into.failed.add(address)
+                return
+            with lock:
+                if into.ended is None and tile not in into.rendered:
+                    into.rendered.add(tile)
+                    into.tiles.append({"tile": tile, "node": node, "pixels": pixels})
+
+
+    def render(into):
+        """Render a picture: rounds of asking every ready pod, until
+        every tile is in or the picture's time is up."""
+        deadline = into.began + PICTURE_SECONDS
+        note = ""
+        while time.monotonic() < deadline:
+            with lock:
+                missing = into.missing()
+                failed = set(into.failed)
+            if not missing:
+                break
+
+            # The pods to ask this round: those that have not failed,
+            # or every pod when all of them have.
+            pods = ready_pods()
+            pods = [pod for pod in pods if pod not in failed] or pods
+            if not pods and len(missing) == SIDE * SIDE:
+                note = "No tab's pod was ready to render a tile."
+                break
+
+            # The tiles in no order, so that the picture fills in all
+            # over and not in rows, and a pod for each tile at most.
+            random.shuffle(missing)
+            wanted = queue.SimpleQueue()
+            for tile in missing:
+                wanted.put(tile)
+            workers = [
+                threading.Thread(target=work, args=(pod, wanted, into, deadline), daemon=True)
+                for pod in pods[: len(missing)]
+            ]
+            for worker in workers:
+                worker.start()
+            for worker in workers:
+                worker.join(max(0, deadline - time.monotonic()))
+
+            # A tile that was put back waits a moment for its next
+            # round: the pod that failed may be the only pod.
+            if not wanted.empty():
+                time.sleep(ROUND_SECONDS)
+
+        # The picture is over, whole or not.
+        with lock:
+            into.ended = time.monotonic()
+            if into.missing():
+                note = note or "The tabs ran out of time, and some tiles are missing."
+            into.note = note
+            took = into.ended - into.began
+            print(f"picture {into.number}: {len(into.tiles)} tiles in {took:.1f} s", flush=True)
+
+
+    def state(number=None, have=0):
+        """The picture as JSON, without the tiles a reader already has."""
+        with lock:
+            answer = {"number": 0, "side": SIDE, "from": 0, "tiles": []}
+            answer.update({"rendering": False, "seconds": 0, "rest": 0, "note": ""})
+            if picture is None:
+                return answer
+
+            # The reader's tiles are left out when they are this
+            # picture's, and not those of a picture since replaced.
+            first = 0
+            if number == picture.number and have <= len(picture.tiles):
+                first = have
+            answer.update({"number": picture.number, "from": first, "tiles": picture.tiles[first:]})
+
+            # A picture being rendered has taken until now, and has no
+            # rest to speak of. Nor has one that came to nothing.
+            now = time.monotonic()
+            ended = picture.ended
+            answer.update({"rendering": ended is None, "note": picture.note})
+            answer["seconds"] = round((ended or now) - picture.began, 1)
+            if ended is not None and picture.tiles:
+                answer["rest"] = max(0, math.ceil(ended + REST_SECONDS - now))
+            return answer
+
+
+    def start():
+        """Begin the next picture, or say why not."""
+        global picture
+        with lock:
+            now = time.monotonic()
+            if picture is not None and picture.ended is None:
+                return HTTPStatus.CONFLICT, "A picture is being rendered."
+            if picture is not None and picture.tiles and now < picture.ended + REST_SECONDS:
+                wait = math.ceil(picture.ended + REST_SECONDS - now)
+                why = f"The tabs rest between pictures. The next may start in {wait} s."
+                return HTTPStatus.TOO_MANY_REQUESTS, why
+            number = 1 if picture is None else picture.number % NUMBERS + 1
+            picture = Picture(number)
+            threading.Thread(target=render, args=(picture,), daemon=True).start()
+        return HTTPStatus.OK, ""
+
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            parts = self.path.split("?")[0].strip("/").split("/")
+            if parts == ["state"]:
+                self.reply(HTTPStatus.OK, state())
+            elif len(parts) == 3 and parts[0] == "state" and all(map(str.isdecimal, parts[1:])):
+                self.reply(HTTPStatus.OK, state(int(parts[1]), int(parts[2])))
+            elif parts == ["start"]:
+                status, why = start()
+                self.reply(status, why or state())
+            else:
+                self.reply(HTTPStatus.NOT_FOUND, "The painter has /state and /start.")
+
+        def reply(self, status, answer):
+            """Answer with a sentence, or with JSON for anything else."""
+            kind, body = "application/json", json.dumps(answer, separators=(",", ":"))
+            if isinstance(answer, str):
+                kind, body = "text/plain; charset=utf-8", answer + "\n"
+            body = body.encode()
+            self.send_response(status)
+            self.send_header("Content-Type", kind)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *arguments):
+            # A line for every read of every page is no log.
+            pass
+
+
+    if __name__ == "__main__":
+        ThreadingHTTPServer(("", PORT), Handler).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: picture
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: picture
+  template:
+    metadata:
+      labels:
+        app: picture
+    spec:
+      containers:
+        - name: painter
+          image: python:3.14-alpine
+          command: ["python3", "/painter/painter.py"]
+          ports:
+            - containerPort: 8000
+          readinessProbe:
+            httpGet:
+              path: /state
+              port: 8000
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 96Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - name: painter
+              mountPath: /painter
+      volumes:
+        - name: painter
+          configMap:
+            name: painter
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: picture
+spec:
+  selector:
+    app: picture
+  ports:
+    - port: 8000
