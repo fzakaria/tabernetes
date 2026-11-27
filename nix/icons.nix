@@ -1,11 +1,20 @@
 # `nix run .#icons`: draw the site's icon at the sizes a browser or a
-# phone wants as a picture, from web/mark.svg, and put the mark where
-# the README shows it. The pictures are checked in; this is how they
+# phone wants as a picture, from web/mark.svg, put the mark where the
+# README shows it, and draw the picture a link to the site is shown
+# with (tools/card.py). The pictures are checked in; this is how they
 # were made, and what to run after the mark changes.
 { pkgs }:
+let
+  # The card's letters are Inter's, which the drawing has to be able to
+  # find whatever fonts the machine has.
+  fonts = pkgs.makeFontsConf { fontDirectories = [ pkgs.inter ]; };
+in
 pkgs.writeShellApplication {
   name = "tabernetes-icons";
-  runtimeInputs = [ pkgs.librsvg ];
+  runtimeInputs = [
+    pkgs.librsvg
+    pkgs.python3
+  ];
   text = ''
     if [ ! -f web/mark.svg ]; then
       echo "run this from the repository's root" >&2
@@ -26,6 +35,13 @@ pkgs.writeShellApplication {
     rm "$square"
 
     cp web/mark.svg docs/img/mark.svg
-    ls -l web/icon-*.png docs/img/mark.svg
+
+    # The link preview's picture.
+    card=$(mktemp --suffix=.svg)
+    python3 ${../tools/card.py} --mark web/mark.svg --land web/land.json --out "$card"
+    FONTCONFIG_FILE=${fonts} rsvg-convert "$card" --output web/card.png
+    rm "$card"
+
+    ls -l web/icon-*.png web/card.png docs/img/mark.svg
   '';
 }
