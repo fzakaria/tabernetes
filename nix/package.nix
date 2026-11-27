@@ -10,18 +10,7 @@ pkgs.buildGoModule {
   pname = "tabernetes";
   inherit (go) version vendorHash;
 
-  # The Go sources and the pages they embed, and nothing else: a change
-  # to the docs or the deployment rebuilds nothing.
-  src = lib.fileset.toSource {
-    root = ../.;
-    fileset = lib.fileset.unions [
-      ../go.mod
-      ../go.sum
-      ../cmd
-      ../internal
-      ../web
-    ];
-  };
+  src = import ./source.nix { inherit lib; };
   subPackages = [ "cmd/tabernetes" ];
 
   env.CGO_ENABLED = 0;

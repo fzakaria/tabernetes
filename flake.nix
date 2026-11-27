@@ -21,10 +21,17 @@
       # agent is Linux's alone, and the cluster's machine is x86-64.
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
+      packages = self.packages.${system};
+
+      # A program of the flake's as something `nix run` takes.
+      app = program: {
+        type = "app";
+        program = pkgs.lib.getExe program;
+      };
     in
     {
       packages.${system} = rec {
-        # the agent
+        # the agent: the site, and the kubelet of every tab
         tabernetes = import ./nix/package.nix { inherit pkgs; };
         default = tabernetes;
 
@@ -40,47 +47,21 @@
       apps.${system} = {
         # copy the bundle to a machine and set the machine up:
         # `nix run .#deploy -- tabernetes.exe.xyz https://tabernetes.exe.xyz`
-        # MAX_NODES and MAX_NODES_PER_ADDRESS in the environment set
-        # the agent's limits (deploy/setup.sh).
-        deploy = {
-          type = "app";
-          program = "${
-            pkgs.writeShellApplication {
-              name = "tabernetes-deploy";
-              runtimeInputs = [
-                pkgs.openssh
-                pkgs.rsync
-              ];
-              text = ''
-                if [ "$#" -ne 2 ]; then
-                  echo "usage: deploy <ssh host> <public address>" >&2
-                  exit 2
-                fi
-                host=$1
-                address=$2
+        deploy = app (
+          import ./nix/deploy.nix {
+            inherit pkgs;
+            inherit (packages) bundle;
+          }
+        );
 
-                # The bundle, then the machine's own setup with it. Files
-                # are compared by their bytes: everything in the store has
-                # the same date, so a rebuilt binary of the same size
-                # would otherwise pass for the old one.
-                rsync --archive --checksum --delete --chmod=u+w --rsync-path="sudo rsync" \
-                  ${self.packages.${system}.bundle}/ "$host":/opt/tabernetes/
-                # The address is expanded here, on purpose: it is this
-                # command's own argument.
-                # shellcheck disable=SC2029
-                ssh "$host" sudo \
-                  MAX_NODES="''${MAX_NODES:-100}" \
-                  MAX_NODES_PER_ADDRESS="''${MAX_NODES_PER_ADDRESS:-4}" \
-                  /opt/tabernetes/deploy/setup.sh "$address"
-              '';
-            }
-          }/bin/tabernetes-deploy";
-        };
+        # write the tables the site's globe is drawn from, into web/
+        globe-data = app (import ./nix/globe-data.nix { inherit pkgs; });
       };
 
       checks.${system} = {
-        # the Go tests run as the package builds
-        inherit (self.packages.${system}) tabernetes;
+        # the Go tests run as the package builds, and the bundle is
+        # what would be deployed
+        inherit (packages) tabernetes bundle;
       };
 
       formatter.${system} = import ./nix/formatter.nix { inherit pkgs; };

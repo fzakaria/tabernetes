@@ -1,0 +1,35 @@
+# Formatting first, then `nix flake check`, which runs everything the
+# flake defines:
+#
+#   checks.tabernetes — the Go tests, as the package builds
+#   checks.bundle     — the directory the cluster's machine gets still
+#                       builds: the agent, tabc from its release, the
+#                       share and the deployment's files
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Formatting
+        run: nix fmt -- --ci
+
+      - name: Tests
+        run: nix flake check -L

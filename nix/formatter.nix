@@ -1,6 +1,6 @@
 # `nix fmt`. The tree wrapper, matching trynix and seenix: one formatting
-# step covers every language in the tree. gofmt for the runtime,
-# prettier for the page, and for markdown at the width the docs are
+# step covers every language in the tree. gofmt for the agent, prettier
+# for the site's pages, and for markdown at the width the docs are
 # written to.
 { pkgs }:
 pkgs.nixfmt-tree.override {
@@ -24,6 +24,7 @@ pkgs.nixfmt-tree.override {
       includes = [
         "*.js"
         "*.html"
+        "*.css"
       ];
     };
     # proseWrap stays at its default of preserving the author's line
