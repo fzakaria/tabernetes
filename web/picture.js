@@ -49,6 +49,9 @@ const PALETTE = [
   [1.0, [194, 65, 12]],
 ];
 
+// The line around a tile nobody has rendered yet.
+const UNRENDERED = "rgba(237, 241, 255, 0.08)";
+
 // What lies over the tiles of other devices while one device's tiles
 // are shown, and the line around the tile under the pointer.
 const VEIL = "rgba(7, 11, 22, 0.78)";
@@ -163,9 +166,17 @@ function drawTile({ tile, pixels }) {
   }
 }
 
-// Draw the picture again from nothing.
+// Draw the picture again from nothing: the outline of every tile, and
+// over the outlines the tiles that have been rendered.
 function drawAll() {
-  byId("picture").getContext("2d").clearRect(0, 0, CANVAS_PX, CANVAS_PX);
+  const context = byId("picture").getContext("2d");
+  context.clearRect(0, 0, CANVAS_PX, CANVAS_PX);
+  context.strokeStyle = UNRENDERED;
+  context.lineWidth = 1;
+  for (let tile = 0; tile < picture.side * picture.side; tile++) {
+    const [left, top, width] = place(tile);
+    context.strokeRect(left + 0.5, top + 0.5, width - 1, width - 1);
+  }
   picture.tiles.forEach(drawTile);
 }
 
