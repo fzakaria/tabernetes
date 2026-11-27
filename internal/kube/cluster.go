@@ -207,7 +207,11 @@ type Service struct {
 	Selector map[string]string
 }
 
-// Services returns every Service that selects pods.
+// Services returns every Service that selects pods and has an address.
+// A Service without an address is a name the cluster's DNS answers
+// with its pods' own addresses: no request goes through such a
+// Service, so the site has no way to draw to its pods and the agent
+// nowhere to send a visitor's request.
 func (c *Cluster) Services(ctx context.Context) ([]Service, error) {
 	list, err := c.client.CoreV1().Services(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -215,7 +219,7 @@ func (c *Cluster) Services(ctx context.Context) ([]Service, error) {
 	}
 	services := make([]Service, 0, len(list.Items))
 	for _, item := range list.Items {
-		if len(item.Spec.Selector) == 0 {
+		if len(item.Spec.Selector) == 0 || item.Spec.ClusterIP == corev1.ClusterIPNone {
 			continue
 		}
 		ports := make([]int32, 0, len(item.Spec.Ports))

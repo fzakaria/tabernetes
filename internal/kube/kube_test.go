@@ -1,12 +1,14 @@
 package kube
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/fzakaria/tabernetes/internal/tab"
 )
@@ -149,5 +151,37 @@ func TestServiceSelects(t *testing.T) {
 	}
 	if (Service{Namespace: "shop"}).Selects("shop", map[string]string{"app": "web"}) {
 		t.Error("a Service with no selector selected a pod")
+	}
+}
+
+// TestServices checks which of a cluster's Services are listed: one
+// that selects pods and has an address, and neither one that selects
+// nothing nor one without an address, which no request goes through:
+// by listing from a stand-in for the API server that has all three.
+func TestServices(t *testing.T) {
+	selector := map[string]string{"app": "web"}
+	named := func(name string) metav1.ObjectMeta {
+		return metav1.ObjectMeta{Namespace: "default", Name: name}
+	}
+	client := fake.NewSimpleClientset(
+		&corev1.Service{ObjectMeta: named("web"), Spec: corev1.ServiceSpec{
+			ClusterIP: "10.96.2.65",
+			Selector:  selector,
+			Ports:     []corev1.ServicePort{{Port: 8000}},
+		}},
+		&corev1.Service{ObjectMeta: named("web-pods"), Spec: corev1.ServiceSpec{
+			ClusterIP: corev1.ClusterIPNone,
+			Selector:  selector,
+			Ports:     []corev1.ServicePort{{Port: 8000}},
+		}},
+		&corev1.Service{ObjectMeta: named("elsewhere"), Spec: corev1.ServiceSpec{ClusterIP: "10.96.0.9"}},
+	)
+
+	services, err := Over(client).Services(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(services) != 1 || services[0].Name != "web" || services[0].ClusterIP != "10.96.2.65" {
+		t.Errorf("listed %+v", services)
 	}
 }
