@@ -69,11 +69,13 @@ const byId = (id) => document.getElementById(id);
 // names itself.
 const OWN_BROWSER = "HeadlessChrome";
 
-// How many of a Service's nodes are named before the rest are counted,
-// and the mark after a line that has more to say to whoever points at
-// it.
+// How many of a Service's nodes are named before the rest are counted.
 const SERVICE_NODES_NAMED = 3;
-const MORE_MARK = "…";
+
+// The class of a line that says more to whoever points at the line,
+// and of a button that reads as a link.
+const TIP_CLASS = "tip";
+const LINKLIKE_CLASS = "linklike";
 
 const BYTES_PER_GB = 1e9;
 
@@ -165,10 +167,10 @@ function renderTiles(view) {
   const pods = view.nodes.flatMap((node) => node.pods);
   const running = pods.filter((pod) => pod.running).length;
   const starting = pods.length - running;
-  tile("nodes", view.nodes.length, `room for ${count(view.room)} more`);
 
-  // Why that much room, and how many of the nodes are the cluster's
-  // own, for whoever points at the mark after the line.
+  // Why there is that much room, and how many of the nodes are the
+  // cluster's own, for whoever points at the line under the number of
+  // nodes.
   const own = view.nodes.filter((node) => node.browser === OWN_BROWSER).length;
   const spare = (view.machine.memoryAvailable / BYTES_PER_GB).toFixed(1);
   const why = [
@@ -179,10 +181,22 @@ function renderTiles(view) {
       ? `${own} of the nodes are headless browsers the cluster keeps open itself, so that it is never empty.`
       : "",
   ];
-  const more = make("span", "more", MORE_MARK);
-  more.tabIndex = 0;
-  more.dataset.tip = why.filter(Boolean).join(" ");
-  byId("tile-nodes-sub").append(" ", more);
+
+  // The line under the number of nodes, underlined with dots to say
+  // that pointing at the line shows more. The line's element is made
+  // once and kept from one reading to the next, so that a line a
+  // visitor has touched stays in focus and goes on showing why.
+  byId("tile-nodes").textContent = view.nodes.length;
+  const sub = byId("tile-nodes-sub");
+  let room = sub.firstElementChild;
+  if (!room) {
+    room = make("span", TIP_CLASS);
+    room.tabIndex = 0;
+    sub.replaceChildren(room);
+  }
+  room.textContent = `room for ${count(view.room)} more`;
+  room.dataset.tip = why.filter(Boolean).join(" ");
+
   tile(
     "pods",
     running,
@@ -491,7 +505,7 @@ function renderServices(view) {
       item.append(what);
       const nodes = service.pods.map((pod) => nodeOf.get(pod)).filter(Boolean);
       // The first few nodes by name, and the rest behind a count that
-      // opens when it is pressed.
+      // is underlined with dots and opens the rest when it is pressed.
       const open = openServices.has(service.name);
       const named = open ? nodes : nodes.slice(0, SERVICE_NODES_NAMED);
       const list = make("span", "when", `${nodes.length} pod${nodes.length === 1 ? "" : "s"}: `);
@@ -501,8 +515,8 @@ function renderServices(view) {
       if (nodes.length > SERVICE_NODES_NAMED) {
         const toggle = make(
           "button",
-          "linklike",
-          open ? "show fewer" : `${nodes.length - SERVICE_NODES_NAMED} more${MORE_MARK}`,
+          LINKLIKE_CLASS,
+          open ? "show fewer" : `${nodes.length - SERVICE_NODES_NAMED} more`,
         );
         toggle.type = "button";
         toggle.addEventListener("click", () => {
@@ -513,7 +527,7 @@ function renderServices(view) {
           }
           renderServices(lastView);
         });
-        list.append(" ", toggle);
+        list.append(open ? " " : " and ", toggle);
       }
       item.append(list);
       return item;

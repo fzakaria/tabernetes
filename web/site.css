@@ -325,32 +325,32 @@ main > h2 {
   white-space: nowrap;
 }
 
-/* A mark after a line that has more to say: pointing at the mark, or
-   touching it, shows what. */
-.tile .sub:has(.more) {
+/* A line that has more to say is underlined with dots: pointing at the
+   line, or touching it, shows what. */
+.tile .sub:has(.tip) {
   overflow: visible;
 }
 
-.more {
+.tip {
   position: relative;
-  cursor: default;
-  padding: 0 3px;
-  border-radius: 4px;
+  cursor: help;
   outline: none;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
 }
 
-.more:hover,
-.more:focus {
-  background: var(--line);
+.tip:hover,
+.tip:focus {
+  color: var(--ink);
 }
 
-.more:hover::after,
-.more:focus::after {
+.tip:hover::after,
+.tip:focus::after {
   content: attr(data-tip);
   position: absolute;
   z-index: 2;
   top: calc(100% + 6px);
-  left: -8px;
+  left: 0;
   width: min(300px, 70vw);
   white-space: normal;
   background: var(--panel);
@@ -661,7 +661,8 @@ tr.lit td {
 }
 
 /* A node's name where it is a link to the node, and a button that
-   reads as a link. */
+   reads as a link. Both are underlined with dots, as everything on the
+   page that answers to a pointer is. */
 a.node-link {
   color: inherit;
   text-decoration: underline dotted;
@@ -675,6 +676,8 @@ button.linklike {
   font: inherit;
   color: var(--accent);
   cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
 }
 
 #topology .nodes g {
