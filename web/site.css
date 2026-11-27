@@ -911,7 +911,10 @@ body.node main {
 }
 
 .pod {
-  flex: 1 1 320px;
+  /* As tall as what the card holds, and taller when the page has room:
+     a card that could shrink would hide its top under an open shell. */
+  flex: 1 0 auto;
+  min-height: 320px;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--line);
@@ -988,13 +991,12 @@ body.node main {
   color: var(--muted);
 }
 
-/* What this node has done, and the button that asks its own pod. */
+/* What this node has done, and under it the button that asks its own
+   pod. The two are rows of their own, so that the button stays where
+   it is when its answer is written beside it. */
 .mine {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px 24px;
+  display: grid;
+  gap: 12px;
   margin: 0 0 16px;
 }
 
