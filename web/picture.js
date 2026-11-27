@@ -3,6 +3,7 @@
 // the tiles arrive, with the device that rendered each.
 
 import { count, seconds } from "./format.js";
+import { TILE_RENDERED } from "./topology.js";
 
 // The painter, by the name the agent exposes it under: where the
 // picture is read from, and what starts the next picture.
@@ -394,6 +395,15 @@ function take(answer) {
     answer.tiles.forEach(drawTile);
   } else {
     drawAll();
+  }
+
+  // The tiles of a picture that is being rendered are news, and the
+  // topology shows each on its way. The tiles of a picture that was
+  // finished before the page looked are not.
+  if (same || answer.rendering) {
+    for (const tile of answer.tiles) {
+      document.dispatchEvent(new CustomEvent(TILE_RENDERED, { detail: { node: tile.node } }));
+    }
   }
   if (!same || answer.tiles.length > 0) {
     renderDevices();

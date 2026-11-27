@@ -2,7 +2,7 @@
 // seconds and shown as a globe, a topology, some numbers and a feed.
 
 import { MACHINE, createGlobe } from "./globe.js";
-import { colors, createTopology } from "./topology.js";
+import { TILE_RENDERED, colors, createTopology } from "./topology.js";
 import {
   MS_PER_SECOND,
   NONE,
@@ -760,6 +760,7 @@ async function start() {
     }
   });
   topology = createTopology(byId("topology"));
+  document.addEventListener(TILE_RENDERED, (event) => topology.tile(event.detail.node));
   byId("ask").addEventListener("click", ask);
   byId("picked-close").addEventListener("click", () => globe.unpick());
   document.querySelectorAll("pre.yaml").forEach(colourYaml);

@@ -67,11 +67,19 @@ const PALETTE = [
 const HANDHELD = new Set(["Android", "iOS"]);
 
 // The dots that move: one from the machine to a node whose pods have
-// carried something, and a larger one for a visitor's own request, from
-// the machine through the Service to the pod that answered. Each has a
-// colour, a size, and how long its way takes.
+// carried something, a larger one for a visitor's own request, from
+// the machine through the Service to the pod that answered, and one
+// for each tile of the picture, from the machine, where the painter
+// is, to the node that rendered the tile. Each has a colour, a size,
+// and how long its way takes.
 const PULSE = { color: "var(--accent)", radius: 2.4, ms: 900 };
 const ASKED = { color: "#ffb020", radius: 4.5, ms: 1400 };
+const TILE = { color: "#5fd39a", radius: 3.4, ms: 700 };
+
+// The event the picture's panel sends for each tile as the tile comes
+// in, with the name of the node that rendered the tile as its detail's
+// node. The page hands each to the topology.
+export const TILE_RENDERED = "tabernetes:tile";
 
 // How long a dot stays where it arrived before it goes.
 const LINGER_MS = 500;
@@ -151,6 +159,10 @@ export function createTopology(svg) {
   // which node to flash.
   let carriedBefore = new Map();
   let flashed = null;
+
+  // Where each node was drawn last, by name, for a dot that sets off
+  // between two drawings.
+  let drawn = new Map();
 
   // The dots in flight, and the layer they are drawn in. The layer is
   // kept from one drawing to the next, so that a dot's way is not cut
@@ -439,6 +451,20 @@ export function createTopology(svg) {
         sky,
       );
       flashed = null;
+      drawn = places;
+    },
+
+    // A node rendered a tile of the picture: a dot goes from the
+    // machine to the node, now, without waiting for the next drawing.
+    tile(node) {
+      const place = drawn.get(node);
+      if (!place) {
+        return;
+      }
+      fly(TILE, [
+        [CENTER, CENTER],
+        [place.x, place.y],
+      ]);
     },
 
     // A visitor's request was answered by a pod on this node: the node
