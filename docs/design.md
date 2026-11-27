@@ -154,12 +154,16 @@ What the page shows comes from three places:
   which is where "carried" comes from: the image's files as the guest
   reads them, the program's output and the pod's own traffic.
 
-A node's place on the globe is the city its browser's time zone is
-named after (`web/zones.json`, from tzdata), set a little apart from
-other nodes of the same city. The agent never looks an address up, and
-no address is in the description. The land is 1817 dots from Natural
-Earth's outline (`web/land.json`). `nix run .#globe-data` writes both
-tables.
+A node's place on the globe is roughly where its address is: the agent
+looks the address up in a database of cities on its own machine
+(`internal/geo`, DB-IP's free database, which `deploy/setup.sh` fetches
+each month) and gives the page a city, a country and coordinates
+rounded to a tenth of a degree. The address goes nowhere to be looked
+up and is not in the description. A node the database does not know is
+placed at the city its browser's time zone is named after
+(`web/zones.json`, from tzdata). Nodes of one place are set a little
+apart. The land is 1817 dots from Natural Earth's outline
+(`web/land.json`). `nix run .#globe-data` writes both tables.
 
 ## Asking the cluster
 
@@ -191,31 +195,70 @@ API server and the machine's own ports were all refused. Names still
 resolve through the cluster's DNS, which forwards outside names, so a
 pod can ask about any name.
 
-Joining is limited to 100 nodes at once and four from one address.
+## How many nodes
+
+Four nodes may join from one address. How many the cluster takes in
+all is the machine's to say (`internal/machine`, read from `/proc`
+every two seconds):
+
+- A tab is turned away while the machine has less than 1 GiB of memory
+  it could still give out (`--reserve-memory`). A node costs it about
+  10 MB, so on the demo's 8 GB that is somewhere past 500 nodes.
+- A tab is asked to wait, and asks again by itself, while the machine's
+  CPUs have been more than 90% busy (`--busy-above`).
+- `--max-nodes` is a ceiling over both, 1000.
+- Pods take turns at the machine's part of starting, eight at a time
+  (`--starts-at-once`): a crowd that joins at once is every one of them
+  a node at once, and their pods a queue.
+
+## The kernel comes from a mirror
+
+A tab's first join downloads about 5 MB, and 4.5 MB of it is the
+kernel. unkernel is published to npm, so jsDelivr serves the same file.
+With `--unkernel-mirror` the agent fetches the kernel from the mirror
+once at its start, and sends tabs there only if the bytes are its own
+copy's. The scripts beside the kernel stay with the agent: a worker's
+script has to come from the page's own origin.
+
+## Seeds
+
+A cluster nobody is visiting has no nodes, and a lone visitor would
+find the counter with no pod to answer. `SEEDS` makes the machine keep
+that many headless browsers of its own with the join page open
+(`deploy/seed.sh`). The agent knows nothing of them: a seed joins from
+the machine's own address like any visitor and counts against that
+address's limit. Each is started in a time zone of its own, and since
+the database of cities does not know the machine's own address, the
+globe draws each at its time zone's city. An idle seed takes about 1%
+of a core and 240 MB.
 
 ## Measured
 
-2026-11-26, on an exe.dev machine with 2 CPUs and 8 GB, k3s 1.37, 40
-headless Chromiums on another machine as the nodes, one Alpine pod
-each:
+2026-11-26, on an exe.dev machine with 2 CPUs and 8 GB, k3s 1.37.
+Headless Chromiums on another machine were the nodes, joining 20 every
+15 seconds until 307 were nodes, each with one Alpine pod. The run was
+cut short there by a deploy, not by the machine.
 
-|                                                         |            |
-| ------------------------------------------------------- | ---------- |
-| one pod, from `kubectl apply` to Running                | 6 s        |
-| 40 pods Running after scaling a Deployment from 1 to 40 | 24 s       |
-| a closed tab's pod Running on another tab               | about 1 s  |
-| the machine's memory with no nodes                      | 825 MB     |
-| the machine's memory a node with a pod                  | 9 MB       |
-| the agent's own memory at 40 nodes                      | 70 MB      |
-| the machine's load at 40 idle pods                      | 0.5        |
-| a node tab's memory in the browser, 128 MiB guest       | 214 MB     |
-| a first join's download, gzipped                        | about 5 MB |
+|                                                   |              |
+| ------------------------------------------------- | ------------ |
+| one pod, from `kubectl apply` to Running          | 6 s          |
+| a tab's pod, from the tab being told to Running   | 1.3 to 3 s   |
+| the same while 80 nodes a minute join             | 5 to 10 s    |
+| a closed tab's pod Running on another tab         | about 1 s    |
+| the machine's memory with no nodes                | 825 MB       |
+| the machine's memory a node with a pod            | 10 MB        |
+| memory still spare at 307 nodes                   | 3.7 GB       |
+| the machine's CPUs while 80 nodes a minute join   | 43% busy     |
+| a request through the site to a pod, median       | 174 ms       |
+| the same, 95th percentile, during the run         | 435 ms       |
+| a node tab's memory in the browser, 128 MiB guest | 214 MB       |
+| a first join's download from the machine, gzipped | about 0.5 MB |
+| a first join's download from jsDelivr             | 4.5 MB       |
 
-k3s itself is 650 MB of the 825. At 9 MB a node, 100 nodes are under a
-gigabyte.
+k3s itself is 650 MB of the 825.
 
-Not measured: phones, more than 40 nodes, a pod doing real work on
-every node at once, and the API server with hundreds of Leases.
+Not measured: phones in number, more than 307 nodes, a pod doing real
+work on every node at once.
 
 ## Missing
 
@@ -224,9 +267,12 @@ every node at once, and the API server with hundreds of Leases.
 - Config maps and secrets, as volumes or as variables.
 - UDP.
 - A pod keeps running through its tab closing only by being started
-  again elsewhere. Moving a running pod needs the guest's memory
-  copied out of the tab, which unkernel can do and nothing here does
-  yet.
+  again elsewhere. unkernel can save a running guest and resume it in
+  another tab, and a branch of tabc does it (`tabc park`: the same
+  process, half a second's pause, a snapshot of 4 to 12 MB). The agent
+  does not use it yet. Kubernetes binds a pod to one node for life, so
+  the agent would have to hand a parked container to the replacement
+  pod that lands on another tab.
 - Redis's first start on a new data directory fails once on a rename
   in the volume and succeeds on the restart. The cause is in how tabc
   serves a volume's ownership, and is not found yet.
